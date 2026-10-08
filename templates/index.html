@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0a0a0a">
+<title>NXC LEVEL UP | Bot Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@600;800;900&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+:root{
+  --bg:#0a0a0a;--card:#141414;--card-2:#1a1a1a;
+  --border:#2a2a2a;--border-h:#4a4a4a;
+  --text:#fff;--text-2:#a1a1aa;--text-3:#71717a;
+  --btn:#e5e5e5;--btn-txt:#0a0a0a;
+  --accent:#7c5cff;--accent-2:#5b9dff;
+  --amber:#f59e0b;--red:#ef4444;
+  --r:12px;--r-md:8px;--r-sm:6px;
+  --font-h:'Outfit',sans-serif;--font-b:'Plus Jakarta Sans',sans-serif;--font-m:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:var(--font-b);background:#0a0a0a;color:#fff;min-height:100vh;overflow-x:hidden;transition:padding-left .2s ease;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{background:#27272a;border-radius:3px}
+.app{max-width:1400px;margin:0 auto;padding:12px 16px;position:relative;z-index:2}
+
+/* SIDEBAR */
+.sidebar{position:fixed;top:0;bottom:0;left:0;width:250px;background:#0d0d0d;border-right:1px solid var(--border);z-index:1001;padding:18px 12px;display:flex;flex-direction:column;transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;}
+.sb-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;opacity:0;pointer-events:none;transition:opacity .2s}
+body.sb-open .sidebar{transform:translateX(0)}
+body.sb-open .sb-backdrop{opacity:1;pointer-events:all}
+@media(min-width:900px){.sidebar{transform:translateX(0)}.sb-backdrop{display:none !important}body{padding-left:250px}.app{max-width:1200px;margin-left:0}}
+.sb-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;padding:0 4px}
+.sb-icon{width:44px;height:44px;border-radius:10px;background:var(--btn);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:var(--btn-txt);flex-shrink:0}
+.sb-brand h2{font-family:var(--font-h);font-size:14px;font-weight:800;color:#fff}
+.sb-brand h2 span{color:var(--text-2)}
+.sb-sub{font-size:9px;color:var(--text-3);letter-spacing:.8px;margin-top:2px;text-transform:uppercase;font-weight:600}
+.sb-nav{display:flex;flex-direction:column;gap:2px;flex:1}
+.sb-item{display:flex;align-items:center;gap:10px;padding:10px 12px;color:var(--text-2);font-family:var(--font-h);font-size:13px;font-weight:600;border-radius:8px;text-decoration:none;cursor:pointer;transition:background .15s,color .15s}
+.sb-item i{width:20px;text-align:center;font-size:14px}
+.sb-item:hover{color:#fff;background:#1f1f1f}
+.sb-item.active{color:var(--btn-txt);background:var(--btn);font-weight:700}
+.sb-foot{margin-top:14px;padding-top:14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
+.sb-user{display:flex;align-items:center;gap:10px;background:#1a1a1a;border:1px solid var(--border);padding:8px 10px;border-radius:8px}
+.sb-avatar{width:32px;height:32px;border-radius:8px;background:var(--btn);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;color:var(--btn-txt)}
+.sb-info{min-width:0;flex:1}
+.sb-name{font-weight:700;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-plan{font-size:9px;color:var(--text-2);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+.sb-plan.adm{color:var(--btn-txt);background:var(--btn);padding:1px 6px;border-radius:4px;display:inline-block}
+.sb-btn{background:#1a1a1a;border:1px solid var(--border);color:var(--text-2);padding:9px 10px;border-radius:8px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:7px;transition:background .15s,border-color .15s;width:100%}
+.sb-btn:hover{background:#252525;border-color:var(--border-h);color:#fff}
+.sb-btn.grad{background:var(--btn);color:var(--btn-txt);border-color:transparent;font-weight:700}
+.sb-btn.grad:hover{background:#fff}
+.sb-btn.danger{color:var(--red)}
+.sb-btn.danger:hover{background:rgba(239,68,68,.1);border-color:var(--red)}
+
+header.top{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--card);border:1px solid var(--border);border-radius:var(--r);margin-bottom:14px;position:sticky;top:8px;z-index:100}
+.hamburger{display:none;background:var(--card-2);border:1px solid var(--border);color:var(--text-2);width:38px;height:38px;border-radius:8px;font-size:15px;cursor:pointer;align-items:center;justify-content:center;flex-shrink:0}
+.hamburger:hover{color:#fff;border-color:var(--border-h)}
+.brand{display:flex;align-items:center;gap:10px;cursor:pointer;flex:1;min-width:0}
+.brand-icon{width:38px;height:38px;border-radius:9px;background:var(--btn);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;color:var(--btn-txt);flex-shrink:0}
+.brand h1{font-family:var(--font-h);font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand h1 span{color:var(--text-2)}
+.brand .sub{font-size:9px;color:var(--text-3);letter-spacing:.8px;text-transform:uppercase;margin-top:1px}
+
+.page{display:none}
+.page.active{display:block}
+
+#toasts{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:340px;pointer-events:none}
+.toast{pointer-events:auto;background:#1a1a1a;border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:#fff;font-size:12.5px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+.toast.success{border-left:3px solid var(--btn)}
+.toast.error{border-left:3px solid var(--red)}
+.toast.info{border-left:3px solid var(--text-3)}
+.toast.warning{border-left:3px solid var(--amber)}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);transition:border-color .15s}
+.card:hover{border-color:var(--border-h)}
+
+.hero{padding:18px 20px;margin-bottom:14px;background:var(--card)}
+.hero-in{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.hero-left{display:flex;align-items:center;gap:14px}
+.hero-num{font-family:var(--font-h);font-size:40px;font-weight:900;line-height:1;color:#fff}
+.hero-meta h2{font-size:12px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text-2)}
+.hero-meta p{font-size:11.5px;color:var(--text-3);margin-top:3px}
+.hero-tag{display:inline-flex;align-items:center;gap:6px;background:#1f1f1f;border:1px solid var(--border-h);padding:4px 10px;border-radius:99px;font-family:var(--font-m);font-size:11px;font-weight:700;color:#e5e5e5;margin-top:6px}
+.hero-tag.exp{background:rgba(239,68,68,.1);border-color:var(--red);color:var(--red)}
+.hero-tag.adm{background:var(--btn);border-color:transparent;color:var(--btn-txt)}
+.hero-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.btn-primary{background:var(--btn);color:var(--btn-txt);font-family:var(--font-h);font-size:12.5px;font-weight:700;padding:9px 16px;border-radius:var(--r-md);border:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:background .15s}
+.btn-primary:hover{background:#fff}
+.btn-outline{background:transparent;border:1px solid var(--border);color:#fff;font-family:var(--font-h);font-size:12.5px;font-weight:600;padding:9px 14px;border-radius:var(--r-md);cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:background .15s,border-color .15s}
+.btn-outline:hover{background:#1f1f1f;border-color:var(--border-h)}
+
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
+@media(min-width:640px){.stats{grid-template-columns:repeat(3,1fr)}}
+.stat{padding:14px;position:relative;overflow:hidden}
+.stat::after{content:'';position:absolute;top:0;left:0;width:100%;height:2px}
+.stat.c::after{background:#e5e5e5}
+.stat.g::after{background:#a3a3a3}
+.stat.p::after{background:#737373}
+.stat-label{font-size:10px;font-weight:700;color:var(--text-3);letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+.stat-val{font-family:var(--font-m);font-size:22px;font-weight:700;line-height:1.1;color:#fff}
+
+.accounts{display:grid;grid-template-columns:1fr;gap:10px}
+@media(min-width:640px){.accounts{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:1100px){.accounts{grid-template-columns:repeat(3,1fr)}}
+.acard{padding:12px 14px}
+.acard-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px}
+.tags{display:flex;gap:5px;flex-wrap:wrap}
+.tag{background:#1a1a1a;border:1px solid var(--border);padding:2px 8px;border-radius:12px;font-size:10.5px;font-weight:600;color:var(--text-2);display:inline-flex;align-items:center;gap:4px}
+.tag i{color:#d4d4d4}
+.tag.on{background:rgba(220,220,220,.08);border-color:#737373;color:#e5e5e5}
+.tag.match{background:rgba(220,220,220,.12);border-color:#a3a3a3;color:#f5f5f5}
+.tag.pause{background:rgba(245,158,11,.12);border-color:var(--amber);color:#fbbf24}
+.tag.br{background:rgba(245,158,11,.1);border-color:var(--amber);color:#fbbf24}
+.tag.br i{color:#fbbf24}
+.tag.lw{background:rgba(124,92,255,.14);border-color:var(--accent);color:#a78bfa}
+.tag.lw i{color:#a78bfa}
+.dot{width:5px;height:5px;border-radius:50%;background:currentColor}
+.arow{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.avatar{width:38px;height:38px;border-radius:10px;background:var(--btn);display:flex;align-items:center;justify-content:center;font-family:var(--font-h);font-size:15px;font-weight:800;flex-shrink:0;color:var(--btn-txt)}
+.ainfo{flex:1;min-width:0}
+.aname-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.aname{font-size:13.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.alvl{background:#1f1f1f;color:#e5e5e5;border:1px solid var(--border-h);font-size:10px;font-weight:700;padding:1px 6px;border-radius:6px}
+.auid{font-family:var(--font-m);font-size:10.5px;color:var(--text-3);margin-top:3px;display:flex;align-items:center;gap:5px}
+.cpy{background:none;border:none;color:var(--text-3);cursor:pointer;font-size:10px}
+.cpy:hover{color:#fff}
+.lvl-box{margin-bottom:10px}
+.lvl-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;font-size:11px;font-weight:700;flex-wrap:wrap;gap:4px}
+.lvl-cur{color:#e5e5e5}
+.lvl-remain{color:var(--amber);font-family:var(--font-m);font-size:10.5px}
+.track{width:100%;height:6px;background:#1f1f1f;border-radius:6px;overflow:hidden}
+.fill{height:100%;background:#e5e5e5;border-radius:6px;transition:width .4s ease}
+.lvl-bottom{display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);margin-top:4px;font-family:var(--font-m)}
+.lvl-bottom .pct{color:#e5e5e5;font-weight:700}
+.exp-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;background:#1a1a1a;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:10px}
+.exp-item{text-align:center;padding:2px}
+.exp-item .lbl{font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px}
+.exp-item .val{font-family:var(--font-m);font-size:12px;font-weight:700;color:#fff}
+.exp-item .val.gain{color:#f5f5f5}
+.acard-actions{display:flex;align-items:center;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border);flex-wrap:wrap;gap:6px}
+.updated{font-size:9.5px;color:var(--text-3)}
+.acts{display:flex;gap:5px;flex-wrap:wrap}
+.act{background:#1a1a1a;border:1px solid var(--border);color:var(--text-2);font-family:var(--font-h);font-size:11px;font-weight:600;padding:5px 10px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:background .15s,border-color .15s,color .15s}
+.act:hover{background:#252525;border-color:var(--border-h);color:#fff}
+.act.danger{color:var(--red)}
+.act.danger:hover{background:rgba(239,68,68,.1);border-color:var(--red)}
+.act.warn{color:var(--amber)}
+.act.warn:hover{background:rgba(245,158,11,.1);border-color:var(--amber)}
+.act.ok{color:#e5e5e5}
+.act.ok:hover{background:#252525;border-color:var(--border-h)}
+
+.empty{text-align:center;padding:40px 20px;border:2px dashed var(--border);border-radius:var(--r);grid-column:1/-1}
+.empty i{font-size:40px;color:var(--text-3);opacity:.5;margin-bottom:12px}
+.empty h3{font-family:var(--font-h);font-size:16px;font-weight:700;margin-bottom:6px}
+.empty p{font-size:12.5px;color:var(--text-3);max-width:380px;margin:0 auto 14px}
+
+.sec-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px}
+.sec-title{display:flex;align-items:center;gap:9px;font-family:var(--font-h);font-size:16px;font-weight:800}
+.sec-title i{color:#d4d4d4}
+.badge{background:#1f1f1f;color:#e5e5e5;border:1px solid var(--border-h);font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px}
+
+.console{background:#0d0d0d;border:1px solid var(--border);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:400px}
+.console-top{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#141414;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px;flex-shrink:0}
+.console-head{display:flex;align-items:center;gap:8px}
+.tdots{display:flex;gap:5px}
+.tdot{width:10px;height:10px;border-radius:50%}
+.tdot.r{background:#ff5f56}
+.tdot.y{background:#ffbd2e}
+.tdot.g{background:#27c93f}
+.console-title{font-family:var(--font-m);font-size:11px;font-weight:600;color:#d4d4d4;letter-spacing:.4px}
+.live-dot{display:inline-block;width:7px;height:7px;background:#d4d4d4;border-radius:50%;margin-left:6px;vertical-align:middle}
+.filters{display:inline-flex;gap:4px;flex-wrap:wrap}
+.fbtn{background:#1a1a1a;border:1px solid var(--border);color:var(--text-2);font-family:var(--font-h);font-size:10.5px;font-weight:600;padding:4px 10px;border-radius:6px;cursor:pointer;transition:background .15s,color .15s}
+.fbtn:hover{color:#fff}
+.fbtn.active{background:var(--btn);color:var(--btn-txt);border-color:transparent;font-weight:700}
+.feed{padding:12px;overflow-y:auto;font-family:var(--font-m);font-size:11.5px;line-height:1.7;flex:1}
+.log{display:flex;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+.log-time{color:var(--text-3);flex-shrink:0}
+.log-msg.info{color:var(--text-2)}
+.log-msg.success{color:#f5f5f5}
+.log-msg.warning{color:#fbbf24}
+.log-msg.error{color:#f87171}
+
+.plans{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:26px}
+@media(min-width:768px){.plans{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:1100px){.plans{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}}
+.plan{background:var(--card);border:1.5px solid var(--border);border-radius:var(--r);padding:20px;position:relative;transition:border-color .15s}
+.plan:hover{border-color:var(--border-h)}
+.plan.pop{border-color:var(--border-h)}
+.plan.free{border-color:var(--border-h)}
+.plan-badge{position:absolute;top:-9px;right:12px;background:var(--btn);color:var(--btn-txt);font-size:10px;font-weight:800;padding:3px 10px;border-radius:8px;text-transform:uppercase}
+.plan-icon{width:44px;height:44px;border-radius:10px;background:#1f1f1f;color:#e5e5e5;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px;border:1px solid var(--border-h)}
+.plan h3{font-family:var(--font-h);font-size:18px;font-weight:800;margin-bottom:4px}
+.plan .dur{font-size:12px;color:var(--text-3);margin-bottom:14px}
+.plan .price{display:flex;align-items:baseline;gap:8px;margin-bottom:16px}
+.plan .price .main{font-family:var(--font-m);font-size:32px;font-weight:800;color:#f5f5f5}
+.plan .price .alt{font-size:12.5px;color:var(--text-3)}
+.plan .feats{list-style:none;display:flex;flex-direction:column;gap:9px;margin-bottom:18px}
+.plan .feats li{font-size:12.5px;color:var(--text-2);display:flex;align-items:center;gap:7px}
+.plan .feats li i{color:#d4d4d4;font-size:13px}
+.btn-buy{width:100%;background:var(--btn);color:var(--btn-txt);font-family:var(--font-h);font-size:13.5px;font-weight:800;padding:11px;border-radius:8px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:background .15s}
+.btn-buy:hover{background:#fff}
+.btn-buy:disabled{opacity:.5;cursor:not-allowed}
+.btn-buy.free{background:#e5e5e5}
+
+.order{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.order h4{font-size:13.5px;font-weight:700;margin-bottom:3px}
+.order p{font-size:11px;color:var(--text-3);font-family:var(--font-m)}
+.order .st{font-size:10px;font-weight:800;padding:4px 10px;border-radius:12px;text-transform:uppercase;border:1px solid}
+.order .st.approved{background:rgba(220,220,220,.08);color:#f5f5f5;border-color:#737373}
+.order .st.pending{background:rgba(245,158,11,.12);color:#fbbf24;border-color:var(--amber)}
+.order .st.rejected{background:rgba(239,68,68,.12);color:#f87171;border-color:var(--red)}
+
+.contact{background:var(--card);border:1.5px solid var(--border);border-radius:var(--r);padding:16px 18px;display:flex;align-items:center;gap:12px;text-decoration:none;color:#fff;margin-bottom:10px;transition:border-color .15s}
+.contact:hover{border-color:var(--border-h)}
+.contact .ic{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:19px;background:var(--btn);color:var(--btn-txt);flex-shrink:0}
+.contact h4{font-size:14px;font-weight:700;margin-bottom:2px}
+.contact p{font-size:11.5px;color:#d4d4d4;font-family:var(--font-m);word-break:break-all}
+.contact .arr{color:var(--text-3);font-size:13px}
+
+.footer{text-align:center;padding:22px 12px 12px;font-size:11.5px;color:var(--text-3);line-height:1.7}
+.footer .heart{color:#ef4444}
+.footer b{color:#d4d4d4}
+
+.adm-badge{display:inline-flex;align-items:center;gap:6px;background:var(--btn);color:var(--btn-txt);font-size:11px;font-weight:800;padding:6px 14px;border-radius:16px;text-transform:uppercase;margin-bottom:14px}
+.asub{display:flex;gap:5px;margin-bottom:16px;overflow-x:auto;padding-bottom:5px;flex-wrap:wrap}
+.asub-btn{background:#1a1a1a;border:1px solid var(--border);color:var(--text-2);font-family:var(--font-h);font-size:11.5px;font-weight:600;padding:7px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:background .15s,color .15s}
+.asub-btn:hover{border-color:var(--border-h);color:#fff}
+.asub-btn.active{background:var(--btn);color:var(--btn-txt);border-color:transparent;font-weight:700}
+.trial-badge{display:inline-block;background:var(--red);color:#fff;font-size:9px;font-weight:800;padding:1px 6px;border-radius:6px;margin-left:4px}
+
+.cred{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:10px}
+.cred-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
+.cred-head h4{font-size:14px;font-weight:800}
+.cred-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.cred-row:last-child{border-bottom:0}
+.cred-lbl{font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.4px;min-width:75px}
+.cred-val{font-family:var(--font-m);font-size:12px;font-weight:600;flex:1;word-break:break-all;min-width:0}
+.cred-val.pass{color:#fbbf24}
+.cred-btn{background:#1f1f1f;border:1px solid var(--border-h);color:#e5e5e5;font-size:10.5px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:inherit;transition:background .15s,color .15s}
+.cred-btn:hover{background:var(--btn);color:var(--btn-txt);border-color:transparent}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1500;display:none;align-items:center;justify-content:center;padding:16px}
+.modal.on{display:flex}
+.mbox{width:100%;max-width:480px;background:#141414;border:1px solid var(--border);border-radius:var(--r);padding:24px;max-height:90vh;overflow-y:auto;position:relative}
+.mhead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:10px}
+.mhead h3{font-family:var(--font-h);font-size:17px;font-weight:800}
+.mhead p{font-size:12px;color:var(--text-3);margin-top:3px}
+.mclose{background:none;border:none;color:var(--text-3);font-size:17px;cursor:pointer;padding:4px;flex-shrink:0}
+.mclose:hover{color:var(--red)}
+
+.fg{margin-bottom:12px}
+.flbl{display:block;font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+.fin{width:100%;background:#0a0a0a;border:1.5px solid var(--border);border-radius:8px;padding:10px 13px;font-family:inherit;font-size:13px;color:#fff;outline:none;transition:border-color .15s}
+.fin:focus{border-color:var(--accent)}
+.fin::placeholder{color:var(--text-3)}
+textarea.fin{min-height:80px;resize:vertical;font-family:var(--font-m);font-size:11.5px}
+select.fin{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2371717a'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;background-size:18px;padding-right:36px;cursor:pointer}
+select.fin option{background:#141414;color:#fff;padding:10px}
+
+.btn-deploy{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-family:var(--font-h);font-size:13px;font-weight:800;padding:10px 18px;border-radius:8px;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:filter .15s,transform .1s;box-shadow:0 4px 14px rgba(124,92,255,.3)}
+.btn-deploy:hover{filter:brightness(1.1)}
+.btn-deploy:active{transform:scale(.98)}
+.btn-deploy:disabled{opacity:.6;cursor:wait;filter:none}
+.mcancel{background:transparent;border:1px solid var(--border);color:var(--text-2);font-family:var(--font-h);font-size:12.5px;font-weight:700;padding:10px 16px;border-radius:8px;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.mcancel:hover{background:#1f1f1f;border-color:var(--border-h);color:#fff}
+
+.tabs{display:flex;background:#1a1a1a;border-radius:8px;padding:3px;margin-bottom:14px;gap:3px}
+.tab-btn{flex:1;background:transparent;border:none;color:var(--text-3);font-family:var(--font-h);font-size:12.5px;font-weight:700;padding:8px;border-radius:6px;cursor:pointer;transition:background .15s,color .15s}
+.tab-btn.active{background:var(--btn);color:var(--btn-txt)}
+.btn-submit{width:100%;background:var(--btn);color:var(--btn-txt);font-family:var(--font-h);font-size:13.5px;font-weight:800;padding:12px;border-radius:8px;border:none;cursor:pointer;margin-top:6px;transition:background .15s}
+.btn-submit:hover{background:#fff}
+.btn-submit:disabled{opacity:.6;cursor:wait}
+
+.auth{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto;background:#0a0a0a}
+.auth-box{width:100%;max-width:400px;background:#141414;border:1px solid var(--border);border-radius:var(--r);padding:28px 24px}
+.auth-head{text-align:center;margin-bottom:20px}
+.auth-logo{width:70px;height:70px;border-radius:16px;margin:0 auto 12px;background:var(--btn);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;color:var(--btn-txt)}
+.auth-head h2{font-family:var(--font-h);font-size:20px;font-weight:900}
+.auth-head p{font-size:11.5px;color:var(--text-3);margin-top:4px}
+
+.loader{position:fixed;inset:0;background:rgba(10,10,10,.95);z-index:3000;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+.loader.on{display:flex}
+.spin{width:38px;height:38px;border:3px solid rgba(220,220,220,.15);border-top-color:#f5f5f5;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loader-text{font-family:var(--font-m);font-size:11.5px;color:#e5e5e5;letter-spacing:1px;font-weight:600}
+
+.bulk-preview{max-height:150px;overflow-y:auto;background:#0a0a0a;border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:8px;font-family:var(--font-m);font-size:11px;color:var(--text-2);line-height:1.6}
+.bulk-preview .ok{color:#f5f5f5}
+.bulk-preview .err{color:#f87171}
+
+@media(max-width:899px){
+  .hamburger{display:inline-flex}
+  .brand .sub{display:none}
+  .brand h1{font-size:12.5px}
+  header.top{padding:8px 10px;top:6px;margin-bottom:12px;gap:8px}
+  .app{padding:10px 12px}
+  .hero{padding:14px}
+  .hero-in{flex-direction:column;align-items:stretch}
+  .hero-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+  .hero-actions .btn-primary,.hero-actions .btn-outline{justify-content:center;padding:9px 8px;font-size:12px}
+  .stats{grid-template-columns:repeat(2,1fr) !important}
+  .stat-val{font-size:18px}
+  .acts .act{flex:1 1 auto;justify-content:center}
+  .feed{max-height:calc(100vh - 320px);font-size:10.5px}
+  #toasts{top:10px;right:10px;left:10px;max-width:calc(100% - 20px)}
+  .mbox{padding:18px 16px}
+  .console{height:calc(100vh - 200px)}
+}
+</style>
+</head>
+<body>
+
+<aside class="sidebar" id="sidebar">
+  <div class="sb-brand">
+    <div class="sb-icon">NXC</div>
+    <div>
+      <h2>NXC LEVEL UP <span>PRO</span></h2>
+      <div class="sb-sub">OB55 ENGINE</div>
+    </div>
+  </div>
+  <nav class="sb-nav">
+    <a class="sb-item active" id="n-home" href="#home"><i class="fa-solid fa-house"></i> <span>Home</span></a>
+    <a class="sb-item" id="n-buy" href="#buy"><i class="fa-solid fa-bolt-lightning"></i> <span>Buy Plans</span></a>
+    <a class="sb-item" id="n-history" href="#history"><i class="fa-solid fa-clock-rotate-left"></i> <span>History</span></a>
+    <a class="sb-item" id="n-contact" href="#contact"><i class="fa-solid fa-paper-plane"></i> <span>Contact</span></a>
+    <a class="sb-item" id="n-live" href="#live"><i class="fa-solid fa-terminal"></i> <span>Live</span></a>
+    <a class="sb-item" id="n-admin" style="display:none;" href="#admin"><i class="fa-solid fa-shield-halved"></i> <span>Admin</span></a>
+  </nav>
+  <div class="sb-foot">
+    <div class="sb-user">
+      <div class="sb-avatar" id="pav">U</div>
+      <div class="sb-info">
+        <div class="sb-name" id="pname">User</div>
+        <div class="sb-plan" id="ptag">Free</div>
+      </div>
+    </div>
+    <button class="sb-btn" id="admBtn" onclick="openAdminModal()"><i class="fa-solid fa-user-shield"></i> <span>Admin Login</span></button>
+    <button class="sb-btn grad" id="admExit" style="display:none;" onclick="adminLogout()"><i class="fa-solid fa-shield-halved"></i> <span>Exit Admin</span></button>
+    <button class="sb-btn danger" onclick="doLogout()"><i class="fa-solid fa-right-from-bracket"></i> <span>Logout</span></button>
+  </div>
+</aside>
+<div class="sb-backdrop" id="sbBackdrop" onclick="toggleSidebar()"></div>
+
+<div id="toasts"></div>
+<div class="loader" id="loader"><div class="spin"></div><div class="loader-text" id="loader-text">LOADING...</div></div>
+
+<!-- AUTH -->
+<div class="auth" id="auth" style="display:none;">
+  <div class="auth-box">
+    <div class="auth-head">
+      <div class="auth-logo">NXC</div>
+      <h2>NXC LEVEL UP</h2>
+      <p>Sign in to access your dashboard</p>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" id="tab-signin" onclick="switchAuth('signin')">Sign In</button>
+      <button class="tab-btn" id="tab-signup" onclick="switchAuth('signup')">Sign Up</button>
+    </div>
+    <form id="form-signin" onsubmit="doLogin(event)">
+      <div class="fg"><label class="flbl">Username</label><input type="text" class="fin" id="si-user" required autocapitalize="none"></div>
+      <div class="fg"><label class="flbl">Password</label><input type="password" class="fin" id="si-pass" required></div>
+      <button type="submit" class="btn-submit" id="btn-si">Sign In →</button>
+    </form>
+    <form id="form-signup" style="display:none;" onsubmit="doRegister(event)">
+      <div class="fg"><label class="flbl">Username</label><input type="text" class="fin" id="su-user" required autocapitalize="none"></div>
+      <div class="fg"><label class="flbl">Display Name</label><input type="text" class="fin" id="su-name" required></div>
+      <div class="fg"><label class="flbl">Password (min 4 chars)</label><input type="password" class="fin" id="su-pass" required></div>
+      <button type="submit" class="btn-submit" id="btn-su">Create Account →</button>
+    </form>
+  </div>
+</div>
+
+<!-- APP -->
+<div class="app" id="app" style="display:none;">
+  <header class="top">
+    <button class="hamburger" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button>
+    <div class="brand" onclick="goTo('home')">
+      <div class="brand-icon">NXC</div>
+      <div>
+        <h1>NXC LEVEL UP <span>PRO</span></h1>
+        <div class="sub">ULTRA EXP ENGINE • OB55</div>
+      </div>
+    </div>
+  </header>
+
+  <main id="pg-home" class="page active">
+    <section class="card hero">
+      <div class="hero-in">
+        <div class="hero-left">
+          <div class="hero-num" id="heroSlots">0</div>
+          <div class="hero-meta">
+            <h2>Available Slots</h2>
+            <p id="heroPlan">Active Plan: Free Tier</p>
+            <div class="hero-tag" id="heroTime"><i class="fa-solid fa-hourglass-half"></i><span id="heroTimeText">Loading...</span></div>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button>
+          <button class="btn-outline" id="btnFreePlan" onclick="openFreePlanModal()"><i class="fa-solid fa-gift"></i> Claim Free Plan</button>
+          <button class="btn-outline" onclick="goTo('buy')"><i class="fa-solid fa-bolt"></i> Upgrade</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats">
+      <div class="card stat c"><div class="stat-label"><span>Active Accounts</span><i class="fa-solid fa-users"></i></div><div class="stat-val" id="sAccounts">0</div></div>
+      <div class="card stat g"><div class="stat-label"><span>Matches Done</span><i class="fa-solid fa-circle-check"></i></div><div class="stat-val" id="sMatches">0</div></div>
+      <div class="card stat p"><div class="stat-label"><span>Total EXP</span><i class="fa-solid fa-arrow-trend-up"></i></div><div class="stat-val" id="sExp">+0</div></div>
+    </section>
+
+    <section style="margin-bottom:22px;">
+      <div class="sec-head">
+        <div class="sec-title"><i class="fa-solid fa-gamepad"></i><span>Account Command</span><span class="badge" id="accBadge">0</span></div>
+        <button class="btn-outline" style="padding:7px 13px;font-size:12px;" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add</button>
+      </div>
+      <div class="accounts" id="accList"></div>
+    </section>
+  </main>
+
+  <main id="pg-buy" class="page">
+    <div style="text-align:center;padding:22px 10px 18px;">
+      <h2 style="font-family:var(--font-h);font-size:24px;font-weight:900;color:#f5f5f5;">Choose Your Plan</h2>
+      <p style="font-size:12.5px;color:var(--text-3);margin-top:5px;">Instant slot unlock after admin confirms payment</p>
+    </div>
+    <div class="plans" id="plansList"></div>
+  </main>
+
+  <main id="pg-history" class="page">
+    <div class="sec-head"><div class="sec-title"><i class="fa-solid fa-receipt"></i> <span>My Orders</span></div></div>
+    <div id="ordersList"></div>
+  </main>
+
+  <main id="pg-contact" class="page">
+    <div style="text-align:center;padding:22px 10px 18px;">
+      <h2 style="font-family:var(--font-h);font-size:24px;font-weight:900;color:#f5f5f5;">Contact & Support</h2>
+      <p style="font-size:12.5px;color:var(--text-3);margin-top:5px;">Reach out for orders, support or any questions</p>
+    </div>
+    <a href="https://t.me/nxcofficial" target="_blank" class="contact">
+      <div class="ic"><i class="fa-brands fa-telegram"></i></div>
+      <div style="flex:1"><h4>Telegram Channel</h4><p>@nxcofficial</p></div>
+      <i class="fa-solid fa-chevron-right arr"></i>
+    </a>
+    <a href="https://t.me/nxcfreelike" target="_blank" class="contact">
+      <div class="ic"><i class="fa-solid fa-users"></i></div>
+      <div style="flex:1"><h4>Telegram Group</h4><p>@nxcfreelike</p></div>
+      <i class="fa-solid fa-chevron-right arr"></i>
+    </a>
+    <a href="https://t.me/kuchupuchu04" target="_blank" class="contact">
+      <div class="ic"><i class="fa-solid fa-headset"></i></div>
+      <div style="flex:1"><h4>DM / Support</h4><p>@kuchupuchu04</p></div>
+      <i class="fa-solid fa-chevron-right arr"></i>
+    </a>
+    <div class="footer">
+      <div style="font-weight:700;font-size:12.5px;margin-bottom:5px;color:var(--text-2);">Made with <span class="heart">❤</span> by <b>NXC OFFICIAL</b></div>
+      <div style="font-size:11px;">Powered by <b>@nxcofficial</b> • © 2026 LEVEL UP SERVICE</div>
+    </div>
+  </main>
+
+  <main id="pg-live" class="page">
+    <div class="sec-head">
+      <div class="sec-title"><i class="fa-solid fa-terminal"></i> <span>Live Console</span></div>
+      <button class="btn-outline" style="padding:7px 13px;font-size:12px;" onclick="clearLogsView()"><i class="fa-solid fa-eraser"></i> Clear</button>
+    </div>
+    <div class="console">
+      <div class="console-top">
+        <div class="console-head">
+          <div class="tdots"><div class="tdot r"></div><div class="tdot y"></div><div class="tdot g"></div></div>
+          <div class="console-title"><i class="fa-solid fa-terminal"></i> YOUR ACTIVITY <span class="live-dot"></span></div>
+        </div>
+        <div class="filters">
+          <button class="fbtn active" onclick="setLogFilter('all',this)">All</button>
+          <button class="fbtn" onclick="setLogFilter('match',this)">Match</button>
+          <button class="fbtn" onclick="setLogFilter('exp',this)">EXP</button>
+        </div>
+      </div>
+      <div class="feed" id="feed"><div class="log"><span class="log-time">[init]</span><span class="log-msg info">Awaiting activity...</span></div></div>
+    </div>
+  </main>
+
+  <main id="pg-admin" class="page">
+    <div class="adm-badge"><i class="fa-solid fa-shield-halved"></i> Admin Panel</div>
+    <section class="stats">
+      <div class="card stat c"><div class="stat-label"><span>Users</span><i class="fa-solid fa-users"></i></div><div class="stat-val" id="aUsers">0</div></div>
+      <div class="card stat g"><div class="stat-label"><span>Accounts</span><i class="fa-solid fa-layer-group"></i></div><div class="stat-val" id="aAccounts">0</div></div>
+      <div class="card stat p"><div class="stat-label"><span>EXP</span><i class="fa-solid fa-arrow-trend-up"></i></div><div class="stat-val" id="aExp">+0</div></div>
+    </section>
+    <div class="asub">
+      <button class="asub-btn active" data-sec="orders" onclick="loadAdminSec('orders',this)"><i class="fa-solid fa-receipt"></i> Orders</button>
+      <button class="asub-btn" data-sec="freeplans" onclick="loadAdminSec('freeplans',this)"><i class="fa-solid fa-gift"></i> Free Plan Requests <span id="freePlanCountBadge" class="trial-badge" style="display:none;">0</span></button>
+      <button class="asub-btn" data-sec="users" onclick="loadAdminSec('users',this)"><i class="fa-solid fa-user-gear"></i> Users</button>
+      <button class="asub-btn" data-sec="credentials" onclick="loadAdminSec('credentials',this)"><i class="fa-solid fa-key"></i> Credentials</button>
+      <button class="asub-btn" data-sec="accounts" onclick="loadAdminSec('accounts',this)"><i class="fa-solid fa-layer-group"></i> Accounts</button>
+      <button class="asub-btn" onclick="downloadCreds()" style="background:#e5e5e5;color:#0a0a0a;border-color:transparent;font-weight:700;"><i class="fa-solid fa-download"></i> Download ZIP</button>
+    </div>
+    <div id="admContent"></div>
+  </main>
+</div>
+
+<!-- MODALS -->
+<div class="modal" id="adminModal">
+  <div class="mbox" style="max-width:380px;">
+    <div class="mhead"><h3><i class="fa-solid fa-shield-halved" style="color:#d4d4d4;"></i> Admin Login</h3><button class="mclose" onclick="closeM('adminModal')"><i class="fa-solid fa-xmark"></i></button></div>
+    <p style="font-size:12px;color:var(--text-3);margin-bottom:14px;">Enter admin password to unlock.</p>
+    <form onsubmit="doAdminLogin(event)">
+      <div class="fg"><label class="flbl">Admin Password</label><input type="password" class="fin" id="adminPass" required></div>
+      <button type="submit" class="btn-submit"><i class="fa-solid fa-unlock"></i> Unlock</button>
+    </form>
+  </div>
+</div>
+
+<!-- INJECT NODE MODAL -->
+<div class="modal" id="injectModal">
+  <div class="mbox" style="max-width:520px;">
+    <div class="mhead">
+      <div>
+        <h3>Inject new node</h3>
+        <p>Enter credentials to run a new instance on the server.</p>
+      </div>
+      <button class="mclose" onclick="closeM('injectModal')"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <form onsubmit="submitAccount(event)">
+      <div class="fg">
+        <label class="flbl">Authentication type</label>
+        <select class="fin" id="injAuthType" onchange="onAuthTypeChange()">
+          <option value="guest">Guest (UID / Password)</option>
+          <option value="token">Access Token</option>
+          <option value="bulk">Bulk Add (paste list)</option>
+        </select>
+      </div>
+
+      <div id="injGuestFields">
+        <div class="fg"><label class="flbl">UID</label><input type="text" class="fin" id="injUID" placeholder="Enter UID" autocomplete="off" spellcheck="false" inputmode="numeric"></div>
+        <div class="fg"><label class="flbl">Password / Key</label><input type="text" class="fin" id="injPWD" placeholder="Enter password" autocomplete="off" spellcheck="false"></div>
+      </div>
+
+      <div id="injTokenFields" style="display:none;">
+        <div class="fg"><label class="flbl">Access Token</label><textarea class="fin" id="injTOK" placeholder="eyJhbGciOi..." spellcheck="false"></textarea></div>
+      </div>
+
+      <div id="injBulkFields" style="display:none;">
+        <div class="fg">
+          <label class="flbl">Accounts (one per line: UID:Password)</label>
+          <textarea class="fin" id="injBulk" rows="8" placeholder="6603048762:PTINCE_abc123&#10;6603048763:PTINCE_def456&#10;6603048764:PTINCE_ghi789" style="min-height:150px;"></textarea>
+        </div>
+        <div class="bulk-preview" id="bulkPreview" style="display:none;"></div>
+      </div>
+
+      <div class="fg" id="injModeField">
+        <label class="flbl">Game mode</label>
+        <select class="fin" id="injMode">
+          <option value="auto">BR → LW (Level 2 → 3)</option>
+          <option value="br">Battle Royale only</option>
+          <option value="lw">Lone Wolf only</option>
+        </select>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
+        <button type="button" class="mcancel" onclick="closeM('injectModal')">Cancel</button>
+        <button type="submit" class="btn-deploy" id="btnAddAcc"><i class="fa-solid fa-rocket"></i> Deploy node</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="checkoutModal">
+  <div class="mbox">
+    <div class="mhead"><h3>Checkout Plan</h3><button class="mclose" onclick="closeM('checkoutModal')"><i class="fa-solid fa-xmark"></i></button></div>
+    <div style="background:#1a1a1a;border:1px solid var(--border-h);border-radius:8px;padding:11px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-weight:700;font-size:14px;" id="coName">Plan</span>
+        <span style="font-family:var(--font-m);font-size:17px;font-weight:800;color:#f5f5f5;" id="coPrice">₹0</span>
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:3px;" id="coDetails"></div>
+    </div>
+    <div class="tabs">
+      <button type="button" class="tab-btn active" id="co-inr" onclick="setCoMethod('INR')"><i class="fa-solid fa-indian-rupee-sign"></i> UPI</button>
+      <button type="button" class="tab-btn" id="co-usd" onclick="setCoMethod('USD')"><i class="fa-brands fa-bitcoin"></i> Binance</button>
+    </div>
+    <div id="coUPI">
+      <div style="text-align:center;margin:6px 0 12px;">
+        <div style="background:#fff;padding:10px;border-radius:14px;display:inline-block;">
+          <img id="coQR" alt="UPI QR" style="width:180px;height:180px;object-fit:contain;display:block;border-radius:6px;">
+        </div>
+      </div>
+      <div style="background:#1a1a1a;border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-size:10px;color:var(--text-3);font-weight:700;text-transform:uppercase;">UPI ID</div>
+          <div style="font-family:var(--font-m);font-size:12.5px;font-weight:700;margin-top:2px;word-break:break-all;" id="coUPIID">lxkazi451@okhdfcbank</div>
+        </div>
+        <button type="button" class="act" onclick="copyTo(BOT.upi_id)"><i class="fa-solid fa-copy"></i></button>
+      </div>
+    </div>
+    <div id="coBIN" style="display:none;">
+      <div style="background:rgba(245,158,11,.08);border:1px solid var(--amber);border-radius:8px;padding:12px;margin-bottom:12px;">
+        <span style="display:inline-flex;align-items:center;gap:6px;background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid var(--amber);padding:3px 9px;border-radius:14px;font-size:10.5px;font-weight:800;"><i class="fa-solid fa-coins"></i> BINANCE PAY</span>
+        <div style="background:#0a0a0a;border:1px dashed var(--amber);border-radius:6px;padding:9px 11px;margin:10px 0;">
+          <div style="font-size:10px;color:#fbbf24;font-weight:700;text-transform:uppercase;">Binance Pay ID</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px;">
+            <span id="coBINID" style="font-family:var(--font-m);font-size:17px;font-weight:800;color:#fbbf24;">1205113943</span>
+            <button type="button" class="act" onclick="copyTo(BOT.binance_id)"><i class="fa-solid fa-copy"></i></button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-2);line-height:1.6;">Amount: <b id="coBINAmt">$0.00 USDT</b></div>
+      </div>
+    </div>
+    <form onsubmit="submitOrder(event)">
+      <div class="fg"><label class="flbl">Transaction ID / UTR *</label><input type="text" class="fin" id="coTxn" placeholder="e.g. 412389471928" required></div>
+      <div class="fg"><label class="flbl">Your Telegram</label><input type="text" class="fin" id="coTG" placeholder="@username"></div>
+      <button type="submit" class="btn-submit"><i class="fa-solid fa-check"></i> Submit for Verification</button>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="freePlanModal">
+  <div class="mbox" style="max-width:440px;">
+    <div class="mhead"><h3><i class="fa-solid fa-gift" style="color:#d4d4d4;"></i> Claim Free Plan</h3><button class="mclose" onclick="closeM('freePlanModal')"><i class="fa-solid fa-xmark"></i></button></div>
+    <div style="background:#1a1a1a;border:1px solid var(--border-h);border-radius:8px;padding:12px;margin-bottom:14px;">
+      <div style="font-weight:800;color:#f5f5f5;font-size:13.5px;margin-bottom:6px;">🎁 One-Time Free Plan</div>
+      <div style="font-size:12px;color:var(--text-2);line-height:1.7;">
+        • <b>3 account slots</b> — run up to 3 FF accounts<br>
+        • <b>12 hours</b> full engine access<br>
+        • Auto BR → LW switching + Anti-AFK<br>
+        • <b>One time only</b> per user<br>
+        • Admin approval within ~15 min
+      </div>
+    </div>
+    <div id="freePlanStatusBox" style="display:none;margin-bottom:14px;"></div>
+    <form onsubmit="submitFreePlanRequest(event)" id="freePlanForm">
+      <div class="fg">
+        <label class="flbl">Your Telegram Username *</label>
+        <input type="text" class="fin" id="fpTg" placeholder="@yourname" required>
+      </div>
+      <div class="fg">
+        <label class="flbl">Reason (optional)</label>
+        <textarea class="fin" id="fpReason" placeholder="Why do you need this?" maxlength="300"></textarea>
+      </div>
+      <button type="submit" class="btn-submit" id="btnFreePlanSubmit"><i class="fa-solid fa-paper-plane"></i> Send Request</button>
+    </form>
+  </div>
+</div>
+
+<script>
+const BOT = { upi_id: "lxkazi451@okhdfcbank", upi_name: "LX KAZI", binance_id: "1205113943" };
+
+const EXP_TABLE = {1:0,2:48,3:202,4:544,5:1012,6:1844,7:2792,8:3800,9:4870,10:6004,11:7192,12:8448,13:9760,14:11140,15:12566,16:14060,17:15610,18:17224,19:18902,20:20632,21:22424,22:24278,23:26192,24:28166,25:30200,26:32294,27:34448,28:37804,29:41274,30:44870,31:48582,32:53394,33:58566,34:64096,35:69994,36:76460,37:83506,38:91128,39:99322,40:108092,41:120144,42:133266,43:147472,44:162760,45:179126,46:196572,47:215368,48:235516,49:257010,50:279860,51:304056,52:348318,53:394982,54:444044,55:495508,56:549364,57:633756,58:721744,59:813336,60:908522,61:1041438,62:1180352,63:1325266,64:1476184,65:1634300,66:1840946,67:2056594,68:2281242,69:2514880,70:2757530,71:3059506,72:3372284,73:3699456,74:4041030,75:4397002,76:4829104,77:5282204,78:5756304,79:6251408,80:6776502,81:7381324,82:8043154,83:8752982,84:9510808,85:10316338,86:11277190,87:12291748,88:13360304,89:14482858,90:15659418,91:17026708,92:18453950,93:19941280,94:21488570,95:23095858,96:24763138,97:26490428,98:28378704,99:30124996,100:32032884};
+
+let token = localStorage.getItem('nxc_token') || '';
+let user = null;
+let botData = null;
+let allPlans = [];
+let allLogs = [];
+let logFilter = 'all';
+let coMethod = 'INR';
+let coPlan = null;
+let planTimer = null;
+let remainSecs = 0;
+let statsTimer = null;
+let adminToken = localStorage.getItem('nxc_admin_token') || '';
+let adminExp = parseInt(localStorage.getItem('nxc_admin_exp') || '0');
+let freePlanState = null;
+let lastAccountsSig = '';
+let lastLogsSig = '';
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ if(s==null) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmt(n){ return Number(n||0).toLocaleString(); }
+function setLoader(show, text){ const el=$('loader'); if(text) $('loader-text').innerText=text; el.classList.toggle('on',!!show); }
+function toast(msg, type='info'){ const c=$('toasts'); const t=document.createElement('div'); t.className='toast '+type; const ic=type==='success'?'fa-circle-check':type==='error'?'fa-triangle-exclamation':type==='warning'?'fa-bell':'fa-circle-info'; t.innerHTML=`<i class="fa-solid ${ic}"></i><span>${esc(msg)}</span>`; c.appendChild(t); setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; setTimeout(()=>t.remove(),300); },3200); }
+function closeM(id){ $(id).classList.remove('on'); }
+function openM(id){ $(id).classList.add('on'); }
+function copyTo(txt){ navigator.clipboard.writeText(txt).then(()=>toast('Copied','success')).catch(()=>prompt('Copy:',txt)); }
+function isAdmin(){ if(!adminToken) return false; if(adminExp && Date.now()/1000 > adminExp){ adminToken=''; adminExp=0; localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp'); return false; } return true; }
+
+async function api(path, opts={}){
+  const h = Object.assign({}, opts.headers||{});
+  if(path.startsWith('/api/admin/') && isAdmin()) h['X-Admin-Token']=adminToken;
+  else if(token) h['Authorization']='Bearer '+token;
+  if(opts.body && !h['Content-Type']) h['Content-Type']='application/json';
+  const r = await fetch(path, Object.assign({},opts,{headers:h}));
+  let d={}; try{ d=await r.json(); }catch(e){}
+  if(r.status===401 && !path.startsWith('/api/admin/')){ toast('Session expired','error'); doLogout(true); throw new Error('Unauth'); }
+  if(r.status===403 && path.startsWith('/api/admin/')){ adminToken=''; adminExp=0; localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp'); applyAdminUI(); toast('Admin session expired','error'); }
+  return {r,d};
+}
+
+function switchAuth(mode){ const isIn = mode==='signin'; $('tab-signin').classList.toggle('active', isIn); $('tab-signup').classList.toggle('active', !isIn); $('form-signin').style.display = isIn ? 'block' : 'none'; $('form-signup').style.display = !isIn ? 'block' : 'none'; }
+
+async function doLogin(e){
+  e.preventDefault();
+  const u=$('si-user').value.trim().toLowerCase(), p=$('si-pass').value;
+  const btn=$('btn-si'); btn.disabled=true; setLoader(true,'SIGNING IN...');
+  try{
+    const r=await fetch('/api/user/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json(); setLoader(false); btn.disabled=false;
+    if(d.status==='ok' && d.token){ token=d.token; user=d.user; localStorage.setItem('nxc_token', token); toast('Welcome '+user.username,'success'); enterApp(); }
+    else toast(d.error||'Login failed','error');
+  }catch(err){ setLoader(false); btn.disabled=false; toast('Network error: '+err.message,'error'); }
+}
+
+async function doRegister(e){
+  e.preventDefault();
+  const u=$('su-user').value.trim().toLowerCase(), n=$('su-name').value.trim(), p=$('su-pass').value;
+  const btn=$('btn-su'); btn.disabled=true; setLoader(true,'CREATING ACCOUNT...');
+  try{
+    const r=await fetch('/api/user/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p,display_name:n})});
+    const d=await r.json(); setLoader(false); btn.disabled=false;
+    if(d.status==='ok' && d.token){ token=d.token; user=d.user; localStorage.setItem('nxc_token', token); toast('Account created!','success'); enterApp(); }
+    else toast(d.error||'Registration failed','error');
+  }catch(err){ setLoader(false); btn.disabled=false; toast('Network error: '+err.message,'error'); }
+}
+
+async function doLogout(silent){
+  try{ await fetch('/api/user/logout',{method:'POST',headers:{'Authorization':'Bearer '+token}}); }catch(e){}
+  token=''; user=null; localStorage.removeItem('nxc_token');
+  if(!silent) toast('Logged out','info');
+  $('auth').style.display='flex'; $('app').style.display='none';
+  if(statsTimer) clearInterval(statsTimer);
+  if(planTimer) clearInterval(planTimer);
+}
+
+async function checkAuth(){
+  if(!token){ $('auth').style.display='flex'; return; }
+  try{
+    const r=await fetch('/api/user/me',{headers:{'Authorization':'Bearer '+token}});
+    const d=await r.json();
+    if(d.status==='ok'){ user=d.user; enterApp(); }
+    else{ token=''; localStorage.removeItem('nxc_token'); $('auth').style.display='flex'; }
+  }catch(e){ $('auth').style.display='flex'; }
+}
+
+function enterApp(){
+  $('auth').style.display='none'; $('app').style.display='block';
+  updateUserPill(); applyAdminUI(); fetchStats(); loadPlans(); updateFreePlanButton();
+  if(statsTimer) clearInterval(statsTimer);
+  statsTimer=setInterval(fetchStats, 8000);
+  applyRoute();
+}
+
+function updateUserPill(){
+  if(!user) return;
+  const name = user.display_name || user.username;
+  $('pname').innerText = name;
+  $('pav').innerText = name.charAt(0).toUpperCase();
+  const tag = $('ptag');
+  if(isAdmin()){ tag.innerText='ADMIN'; tag.className='sb-plan adm'; }
+  else { tag.innerText = user.plan || 'Free'; tag.className='sb-plan'; }
+}
+
+function openAdminModal(){ openM('adminModal'); $('adminPass').value=''; setTimeout(()=>$('adminPass').focus(),100); }
+
+async function doAdminLogin(e){
+  e.preventDefault();
+  const p = $('adminPass').value.trim();
+  if(!p) return toast('Enter password','warning');
+  setLoader(true,'VERIFYING...');
+  try{
+    const r = await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+    const d = await r.json(); setLoader(false);
+    if(d.status==='ok' && d.token){
+      adminToken=d.token; adminExp=Math.floor(Date.now()/1000)+(d.expires_in||604800);
+      localStorage.setItem('nxc_admin_token',adminToken); localStorage.setItem('nxc_admin_exp',adminExp);
+      toast('Admin activated!','success');
+      closeM('adminModal'); applyAdminUI(); goTo('admin');
+    } else toast(d.error||'Wrong password','error');
+  }catch(err){ setLoader(false); toast('Network error: '+err.message,'error'); }
+}
+
+function adminLogout(){
+  adminToken=''; adminExp=0;
+  localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp');
+  toast('Admin disabled','info'); applyAdminUI(); goTo('home');
+}
+
+function applyAdminUI(){
+  const adm = isAdmin();
+  $('n-admin').style.display = adm ? 'flex' : 'none';
+  $('admBtn').style.display = adm ? 'none' : 'flex';
+  $('admExit').style.display = adm ? 'flex' : 'none';
+  if(user) updateUserPill();
+  if(adm) refreshFreePlanBadge();
+}
+
+window.goTo = function(tab){ if(window.location.hash !== '#'+tab) window.location.hash = tab; else applyRoute(); };
+
+function applyRoute(){
+  let tab = (window.location.hash || '#home').slice(1);
+  if(!['home','buy','history','contact','live','admin'].includes(tab)) tab='home';
+  if(tab==='admin' && !isAdmin()){ openAdminModal(); tab='home'; }
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const el=$('pg-'+tab); if(el) el.classList.add('active');
+  document.querySelectorAll('.sb-item').forEach(n=>n.classList.remove('active'));
+  const nav=$('n-'+tab); if(nav) nav.classList.add('active');
+  if(tab==='buy') loadPlans();
+  if(tab==='history') loadOrders();
+  if(tab==='admin'){ loadAdminSec('orders'); refreshFreePlanBadge(); }
+  if(tab==='live') renderLogs();
+  if(window.innerWidth < 900) document.body.classList.remove('sb-open');
+  window.scrollTo(0,0);
+}
+window.addEventListener('hashchange', applyRoute);
+
+window.toggleSidebar = function(){ document.body.classList.toggle('sb-open'); };
+document.querySelectorAll('.sb-item').forEach(item=>{ item.addEventListener('click', ()=>{ if(window.innerWidth < 900) document.body.classList.remove('sb-open'); }); });
+
+async function fetchStats(){
+  try{
+    const {d}=await api('/api/stats');
+    if(d.status!=='ok') return;
+    botData = d;
+    $('heroSlots').innerText = d.available_slots ?? 0;
+    const planName = d.plan_name || (user && user.plan) || 'Free Tier';
+    $('heroPlan').innerText = `Active Plan: ${planName} (${d.available_slots??0} / ${d.user_slots??0} Slots)`;
+    updatePlanTimer(d.remaining_seconds, isAdmin(), d.plan_expired);
+    $('sAccounts').innerText = d.total_accounts ?? 0;
+    $('sMatches').innerText = d.total_matches ?? 0;
+    $('sExp').innerText = '+' + fmt(d.total_gained_exp||0);
+    $('accBadge').innerText = d.total_accounts ?? 0;
+    const sig = JSON.stringify((d.accounts||[]).map(a => `${a.uid}|${a.level}|${a.current_exp}|${a.gained_exp}|${a.matches_played}|${a.status}|${a.is_paused}|${a.active_matches}|${a.mode}`));
+    if(sig !== lastAccountsSig){ lastAccountsSig = sig; renderAccounts(d.accounts||[]); }
+    const lSig = (d.logs||[]).length + '|' + (d.logs && d.logs.length ? d.logs[d.logs.length-1].time : '');
+    if(lSig !== lastLogsSig){ lastLogsSig = lSig; allLogs = d.logs||[]; renderLogs(); }
+  }catch(e){}
+}
+
+function updatePlanTimer(secs, adm, expired){
+  if(planTimer){ clearInterval(planTimer); planTimer=null; }
+  remainSecs = typeof secs==='number' ? secs : 0;
+  const pill=$('heroTime'), txt=$('heroTimeText');
+  if(adm){ pill.className='hero-tag adm'; txt.innerHTML='<i class="fa-solid fa-infinity"></i> Unlimited'; return; }
+  if(expired || remainSecs<=0){ pill.className='hero-tag exp'; txt.innerHTML='<i class="fa-solid fa-triangle-exclamation"></i> No active plan'; return; }
+  pill.className='hero-tag';
+  const tick=()=>{
+    if(remainSecs<=0){ clearInterval(planTimer); pill.className='hero-tag exp'; txt.innerHTML='<i class="fa-solid fa-triangle-exclamation"></i> Expired'; return; }
+    const r=remainSecs, dd=Math.floor(r/86400), hh=Math.floor((r%86400)/3600), mm=Math.floor((r%3600)/60), ss=r%60;
+    const f = dd>0 ? `${dd}d ${hh}h ${mm}m ${ss}s` : `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+    txt.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${f}`;
+    remainSecs--;
+  };
+  tick(); planTimer = setInterval(tick, 1000);
+}
+
+function renderAccounts(accs){
+  const box=$('accList');
+  if(!accs.length){
+    box.innerHTML = `<div class="empty"><i class="fa-solid fa-ghost"></i><h3>No Accounts Connected</h3><p>Add your first FreeFire account to start leveling up.</p><button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button></div>`;
+    return;
+  }
+  let html = '';
+  for(const acc of accs){
+    const paused = acc.is_paused || acc.status === 'PAUSED';
+    const inMatch = acc.status === 'IN_MATCH' || (acc.status && acc.status.startsWith('IN_MATCH'));
+    let stCls='on', stTxt='ONLINE';
+    if(paused){ stCls='pause'; stTxt='PAUSED'; }
+    else if(inMatch){ stCls='match'; stTxt=`IN MATCH (${acc.active_matches||1})`; }
+    else if(acc.status && acc.status.startsWith('SEARCHING')){ stCls='match'; stTxt=acc.status; }
+    const lvl = Math.max(1, parseInt(acc.level)||1);
+    const nextLvl = Math.min(100, lvl+1);
+    const base = EXP_TABLE[lvl] ?? 0;
+    const target = EXP_TABLE[nextLvl] ?? (base + 50000);
+    const curExp = Number(acc.current_exp||0);
+    const earned = Math.max(0, curExp - base);
+    const need = Math.max(1, target - base);
+    const remain = Math.max(0, target - curExp);
+    const pct = lvl>=100 ? 100 : Math.min(100, Math.max(0, (earned/need)*100));
+    const gained = Number(acc.gained_exp||0);
+    const matches = acc.matches_played || 0;
+    const initial = (acc.nickname||'P').trim().charAt(0).toUpperCase();
+    const uid = acc.uid;
+
+    // MODE BADGE
+    const rawMode = String(acc.mode || 'auto').toLowerCase();
+    let isLW;
+    if(rawMode === 'lw') isLW = true;
+    else if(rawMode === 'br') isLW = false;
+    else isLW = (lvl >= 3);
+    const modeLabel = isLW ? 'LW' : 'BR';
+    const modeCls = isLW ? 'lw' : 'br';
+    const modeTitle = rawMode === 'auto'
+      ? (isLW ? 'Lone Wolf (auto, Lv3+)' : 'Battle Royale (auto, Lv<3)')
+      : (isLW ? 'Lone Wolf (locked)' : 'Battle Royale (locked)');
+
+    html += `<div class="card acard">
+      <div class="acard-top">
+        <div class="tags">
+          <span class="tag"><i class="fa-solid fa-globe"></i> ${esc(acc.region||'BD')}</span>
+          <span class="tag ${modeCls}" title="${esc(modeTitle)}"><i class="fa-solid fa-bullseye"></i> ${modeLabel}</span>
+          <span class="tag"><i class="fa-solid fa-id-card"></i> ${esc(uid)}</span>
+        </div>
+        <span class="tag ${stCls}"><span class="dot"></span>${esc(stTxt)}</span>
+      </div>
+      <div class="arow"><div class="avatar">${esc(initial)}</div><div class="ainfo"><div class="aname-row"><span class="aname">${esc(acc.nickname||'Player')}</span><span class="alvl">Lv. ${lvl}</span></div><div class="auid">UID: ${esc(uid)} <button class="cpy" onclick="copyTo('${esc(uid)}')"><i class="fa-solid fa-copy"></i></button></div></div></div>
+      <div class="lvl-box">
+        <div class="lvl-top"><span class="lvl-cur">Level ${lvl} → ${nextLvl}</span><span class="lvl-remain">${fmt(remain)} EXP to go</span></div>
+        <div class="track"><div class="fill" style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="lvl-bottom"><span>${fmt(earned)} / ${fmt(need)}</span><span class="pct">${pct.toFixed(1)}%</span></div>
+      </div>
+      <div class="exp-grid"><div class="exp-item"><div class="lbl">Matches</div><div class="val">${matches}</div></div><div class="exp-item"><div class="lbl">Initial</div><div class="val">${fmt(acc.initial_exp||0)}</div></div><div class="exp-item"><div class="lbl">Current</div><div class="val">${fmt(curExp)}</div></div><div class="exp-item"><div class="lbl">Gained</div><div class="val gain">+${fmt(gained)}</div></div></div>
+      <div class="acard-actions">
+        <div class="updated">Updated: ${esc(acc.last_updated||'Active')}</div>
+        <div class="acts">
+          <button class="act ${paused?'ok':'warn'}" onclick="togglePause('${esc(uid)}')"><i class="fa-solid ${paused?'fa-play':'fa-pause'}"></i> ${paused?'Resume':'Pause'}</button>
+          <button class="act" onclick="refreshAcc('${esc(uid)}')"><i class="fa-solid fa-rotate"></i></button>
+          <button class="act" onclick="restartAcc('${esc(uid)}')"><i class="fa-solid fa-power-off"></i></button>
+          <button class="act danger" onclick="deleteAcc('${esc(uid)}')"><i class="fa-solid fa-trash"></i></button>
+        </div>
+      </div>
+    </div>`;
+  }
+  box.innerHTML = html;
+}
+
+window.togglePause = async(uid)=>{ try{ const {d}=await api('/api/account/pause',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast(d.message||'Toggled','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
+window.refreshAcc = async(uid)=>{ try{ toast('Refreshing...','info'); await api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid})}); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },800); }catch(e){ toast(e.message,'error'); } };
+window.restartAcc = async(uid)=>{ if(!confirm('Restart bot for '+uid+'?')) return; try{ const {d}=await api('/api/account/restart',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Restarting...','success'); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },1200); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
+window.deleteAcc = async(uid)=>{ if(!confirm('Delete '+uid+'?')) return; try{ const {d}=await api('/api/account/delete',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Deleted','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
+
+window.openAddAccount = ()=>{
+  if(!botData) return;
+  if(!isAdmin()){
+    if(botData.plan_expired){ toast('No active plan.','warning'); goTo('buy'); return; }
+    if(botData.available_slots<=0){ toast('All slots used.','warning'); goTo('buy'); return; }
+  }
+  $('injAuthType').value = 'guest';
+  $('injUID').value = ''; $('injPWD').value = ''; $('injTOK').value = ''; $('injBulk').value = '';
+  $('injMode').value = 'auto';
+  $('bulkPreview').style.display = 'none';
+  onAuthTypeChange();
+  openM('injectModal');
+  setTimeout(()=>{ try{ $('injUID').focus(); }catch(e){} },120);
+};
+
+window.onAuthTypeChange = ()=>{
+  const t = $('injAuthType').value;
+  $('injGuestFields').style.display = t==='guest' ? 'block' : 'none';
+  $('injTokenFields').style.display = t==='token' ? 'block' : 'none';
+  $('injBulkFields').style.display = t==='bulk' ? 'block' : 'none';
+  $('injModeField').style.display = t==='bulk' ? 'none' : 'block';
+};
+
+document.addEventListener('input', (e)=>{
+  if(e.target && e.target.id === 'injBulk'){
+    const lines = e.target.value.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+    const pv = $('bulkPreview');
+    if(!lines.length){ pv.style.display='none'; return; }
+    pv.style.display='block';
+    pv.innerHTML = lines.slice(0,50).map((l,i)=>{
+      const parts = l.split(/[:\s,|]+/).filter(Boolean);
+      const ok = parts.length >= 2;
+      return `<div class="${ok?'ok':'err'}">${i+1}. ${esc(l)} ${ok?'✓':'(invalid)'}</div>`;
+    }).join('') + (lines.length>50?`<div style="color:var(--text-3);">... +${lines.length-50} more</div>`:'');
+  }
+});
+
+window.submitAccount = async(e)=>{
+  e.preventDefault();
+  const btn = $('btnAddAcc');
+  const authType = $('injAuthType').value;
+  const mode = $('injMode').value || 'auto';
+  btn.disabled = true;
+
+  try{
+    if(authType === 'bulk'){
+      const text = $('injBulk').value.trim();
+      if(!text){ toast('Paste accounts first','warning'); btn.disabled=false; return; }
+      const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+      const accounts = [];
+      for(const l of lines){
+        const parts = l.split(/[:\s,|]+/).filter(Boolean);
+        if(parts.length >= 2) accounts.push({uid: parts[0], password: parts[1], mode: mode});
+      }
+      if(!accounts.length){ toast('No valid accounts','warning'); btn.disabled=false; return; }
+      toast(`Deploying ${accounts.length} nodes...`,'info');
+      const {r,d} = await api('/api/account/bulk-add',{method:'POST',body:JSON.stringify({accounts})});
+      if(r.ok && d.status==='ok'){
+        toast(`Deployed ${d.added}${d.failed?', '+d.failed+' failed':''}`,'success');
+        closeM('injectModal'); $('injBulk').value=''; $('bulkPreview').style.display='none';
+        lastAccountsSig='';
+        setTimeout(fetchStats, 1000);
+      } else toast(d.error||'Failed','error');
+    } else {
+      let payload;
+      if(authType==='guest'){
+        const uid=$('injUID').value.trim(), pwd=$('injPWD').value.trim();
+        if(!uid||!pwd){ toast('UID & Password required','warning'); btn.disabled=false; return; }
+        payload={uid, password:pwd, mode};
+      } else {
+        const tok=$('injTOK').value.trim();
+        if(!tok){ toast('Token required','warning'); btn.disabled=false; return; }
+        payload={token:tok, mode};
+      }
+      const {r,d}=await api('/api/account/add',{method:'POST',body:JSON.stringify(payload)});
+      if(r.ok && d.status==='ok'){
+        toast('Node deployed','success');
+        closeM('injectModal');
+        $('injUID').value=''; $('injPWD').value=''; $('injTOK').value=''; $('injBulk').value='';
+        lastAccountsSig='';
+        setTimeout(fetchStats,700);
+      } else toast(d.error||'Failed','error');
+    }
+  }catch(err){ toast(err.message,'error'); }
+  btn.disabled = false;
+};
+
+async function loadPlans(){ try{ const {d}=await api('/api/plans'); if(d.status==='ok'){ allPlans=d.plans||[]; renderPlans(); } }catch(e){} }
+
+function renderPlans(){
+  const box=$('plansList');
+  let html = '';
+  const fp = freePlanState;
+  const fpActive = fp && fp.is_active && fp.remaining_seconds > 0;
+  const fpPending = fp && fp.has_pending;
+  const fpUsed = fp && fp.already_used;
+  let fpBtnText = '<i class="fa-solid fa-gift"></i> Claim Free Plan';
+  let fpBtnAction = 'openFreePlanModal()';
+  let fpBtnDisabled = false;
+  if(fpActive){ fpBtnText = '<i class="fa-solid fa-check-circle"></i> Active'; fpBtnDisabled = true; }
+  else if(fpPending){ fpBtnText = '<i class="fa-solid fa-hourglass-half"></i> Pending'; fpBtnDisabled = true; }
+  else if(fpUsed){ fpBtnText = '<i class="fa-solid fa-ban"></i> Already Used'; fpBtnDisabled = true; }
+
+  html += `<div class="plan free">
+    <div class="plan-badge">FREE</div>
+    <div class="plan-icon"><i class="fa-solid fa-gift"></i></div>
+    <h3>Free Plan</h3>
+    <p class="dur">One-time • 12 Hours</p>
+    <div class="price"><span class="main">₹0</span><span class="alt">/ Free</span></div>
+    <ul class="feats">
+      <li><i class="fa-solid fa-circle-check"></i> <span>3 concurrent accounts</span></li>
+      <li><i class="fa-solid fa-circle-check"></i> <span>12 hours runtime</span></li>
+      <li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li>
+      <li><i class="fa-solid fa-circle-check"></i> <span>Admin approval</span></li>
+    </ul>
+    <button class="btn-buy free" onclick="${fpBtnAction}" ${fpBtnDisabled?'disabled':''}>${fpBtnText}</button>
+  </div>`;
+
+  if(allPlans.length){
+    html += allPlans.map(p=>`<div class="plan ${p.popular?'pop':''}">${p.badge?`<div class="plan-badge">${esc(p.badge)}</div>`:''}<div class="plan-icon"><i class="fa-solid fa-bolt"></i></div><h3>${esc(p.name)}</h3><p class="dur">${esc(p.duration_text||'')}</p><div class="price"><span class="main">₹${p.price_inr}</span><span class="alt">/ $${p.price_usd}</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>${p.slots} accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li><li><i class="fa-solid fa-circle-check"></i> <span>${esc(p.duration_text)}</span></li></ul><button class="btn-buy" onclick="buyPlan('${esc(p.id)}')"><i class="fa-solid fa-bolt"></i> Buy Now</button></div>`).join('');
+  }
+  box.innerHTML = html;
+}
+
+window.buyPlan = (id)=>{
+  const p = allPlans.find(x=>x.id===id);
+  if(!p) return;
+  coPlan = p;
+  $('coName').innerText = p.name;
+  $('coDetails').innerText = `${p.slots} Accounts • ${p.duration_text||''}`;
+  $('coTxn').value='';
+  $('coTG').value = (user && user.username) ? '@'+user.username : '';
+  setCoMethod('INR');
+  openM('checkoutModal');
+};
+
+window.setCoMethod = (m)=>{
+  coMethod = m;
+  const usd = m==='USD';
+  $('co-inr').classList.toggle('active', !usd);
+  $('co-usd').classList.toggle('active', usd);
+  $('coUPI').style.display = usd ? 'none':'block';
+  $('coBIN').style.display = usd ? 'block':'none';
+  if(!usd){
+    const upi = `upi://pay?pa=${encodeURIComponent(BOT.upi_id)}&pn=${encodeURIComponent(BOT.upi_name)}&cu=INR`;
+    $('coQR').src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=8&data=${encodeURIComponent(upi)}`;
+  }
+  if(coPlan){
+    $('coPrice').innerText = usd ? `$${coPlan.price_usd}` : `₹${coPlan.price_inr}`;
+    $('coBINAmt').innerText = `$${coPlan.price_usd} USDT`;
+  }
+};
+
+window.submitOrder = async(e)=>{
+  e.preventDefault();
+  if(!coPlan) return;
+  const txn = $('coTxn').value.trim();
+  const tg = $('coTG').value.trim();
+  if(!txn) return toast('Enter transaction ID','warning');
+  try{
+    const {d}=await api('/api/plans/order',{method:'POST',body:JSON.stringify({plan_id: coPlan.id, transaction_id: txn, user_telegram: tg, payment_method: coMethod==='USD' ? 'Binance Pay':'UPI'})});
+    if(d.status==='ok'){ toast('Order submitted','success'); closeM('checkoutModal'); goTo('history'); }
+    else toast(d.error||'Failed','error');
+  }catch(e){ toast(e.message,'error'); }
+};
+
+async function loadOrders(){
+  const box=$('ordersList');
+  try{
+    const {d}=await api('/api/plans/my-orders');
+    const orders=d.orders||[];
+    if(!orders.length){ box.innerHTML='<div class="empty"><i class="fa-solid fa-receipt"></i><h3>No Orders Yet</h3></div>'; return; }
+    box.innerHTML = orders.map(o=>`<div class="order"><div><h4>${esc(o.plan_name)} — ₹${o.price_inr}</h4><p>${esc(o.id)} • ${esc(o.transaction_id)}</p></div><span class="st ${esc(o.status)}">${esc(o.status)}</span></div>`).join('');
+  }catch(e){ box.innerHTML='<div class="empty"><h3>Error</h3></div>'; }
+}
+
+window.setLogFilter = (f,btn)=>{ logFilter = f; document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('active')); if(btn) btn.classList.add('active'); renderLogs(); };
+window.clearLogsView = ()=>{ $('feed').innerHTML = '<div class="log"><span class="log-time">[clear]</span><span class="log-msg info">Cleared.</span></div>'; };
+
+function renderLogs(){
+  const feed=$('feed');
+  if(!feed) return;
+  const adm = isAdmin();
+  let base = (allLogs||[]).slice(-50);
+  if(!adm) base = base.filter(l => l.level !== 'error' && l.level !== 'warning');
+  if(!base.length){ feed.innerHTML='<div class="log"><span class="log-time">[init]</span><span class="log-msg info">Awaiting activity...</span></div>'; return; }
+  const list = base.filter(l=>{
+    if(logFilter==='all') return true;
+    const m = (l.message||'').toLowerCase();
+    if(logFilter==='match') return m.includes('match')||m.includes('udp')||m.includes('lone')||m.includes('br')||m.includes('search');
+    if(logFilter==='exp') return m.includes('exp')||m.includes('level');
+    return true;
+  });
+  if(!list.length){ feed.innerHTML=`<div class="log"><span class="log-time">[filter]</span><span class="log-msg info">No logs.</span></div>`; return; }
+  feed.innerHTML = list.map(l=>`<div class="log"><span class="log-time">[${esc(l.time||'')}]</span><span class="log-msg ${esc(l.level||'info')}">${esc(l.message||'')}</span></div>`).join('');
+  feed.scrollTop = feed.scrollHeight;
+}
+
+window.downloadCreds = function(){
+  if(!isAdmin()){ openAdminModal(); return; }
+  const t = localStorage.getItem('nxc_admin_token') || '';
+  fetch('/api/admin/download-credentials', {headers:{'X-Admin-Token': t}})
+    .then(r => { if(!r.ok) throw new Error('Failed'); return r.blob(); })
+    .then(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+      a.download = `nxc_credentials_${ts}.zip`;
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 800);
+      toast('Downloading...','success');
+    })
+    .catch(e => toast('Failed','error'));
+};
+
+function updateFreePlanBadge(count){
+  const b = $('freePlanCountBadge');
+  if(!b) return;
+  if(count > 0){ b.innerText = count; b.style.display = 'inline-block'; }
+  else b.style.display = 'none';
+}
+
+async function refreshFreePlanBadge(){
+  if(!isAdmin()) return;
+  try{
+    const {d} = await api('/api/admin/free-plan-requests');
+    const pending = (d.requests||[]).filter(r => r.status === 'pending').length;
+    updateFreePlanBadge(pending);
+  }catch(e){}
+}
+
+window.loadAdminSec = async(sec,btn)=>{
+  if(!isAdmin()){ openAdminModal(); return; }
+  document.querySelectorAll('.asub-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  else document.querySelectorAll('.asub-btn').forEach(b=>{ if(b.dataset.sec===sec) b.classList.add('active'); });
+  const c = $('admContent');
+  c.innerHTML = '<div style="text-align:center;padding:30px;"><div class="spin" style="margin:0 auto;"></div></div>';
+  try{
+    if(sec==='orders'){
+      const {d} = await api('/api/admin/orders');
+      const orders = d.orders||[];
+      c.innerHTML = orders.length===0 ? '<div class="empty"><h3>No Orders</h3></div>' : orders.map(o=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;font-size:13.5px;">${esc(o.username)} → ${esc(o.plan_name)} (₹${o.price_inr})</div><div style="font-size:11px;color:var(--text-3);font-family:var(--font-m);margin-top:3px;">${esc(o.id)} • ${esc(o.transaction_id)}</div></div><div style="display:flex;gap:6px;">${o.status==='pending'?`<button class="act ok" onclick="admOrderAction('${esc(o.id)}','approve')"><i class="fa-solid fa-check"></i></button><button class="act danger" onclick="admOrderAction('${esc(o.id)}','reject')"><i class="fa-solid fa-xmark"></i></button>`:`<span class="tag" style="text-transform:uppercase;font-size:10px;">${esc(o.status)}</span>`}</div></div></div>`).join('');
+      const {d:ov} = await api('/api/admin/overview');
+      if(ov.status==='ok'){ $('aUsers').innerText = ov.overview.total_users; $('aAccounts').innerText = ov.overview.total_active_accounts; $('aExp').innerText = '+' + fmt(ov.overview.total_gained_exp||0); }
+    } else if(sec==='freeplans'){
+      const {d} = await api('/api/admin/free-plan-requests');
+      const reqs = d.requests||[];
+      const pending = reqs.filter(r => r.status === 'pending');
+      updateFreePlanBadge(pending.length);
+      if(!reqs.length){ c.innerHTML = '<div class="empty"><h3>No Free Plan Requests</h3></div>'; }
+      else {
+        c.innerHTML = reqs.map(r=>{
+          const isPending = r.status === 'pending';
+          const when = new Date(r.created_at * 1000).toLocaleString();
+          const statusColor = r.status === 'approved' ? '#f5f5f5' : r.status === 'rejected' ? '#f87171' : '#fbbf24';
+          const statusIcon = r.status === 'approved' ? 'fa-check-circle' : r.status === 'rejected' ? 'fa-times-circle' : 'fa-hourglass-half';
+          return `<div class="card acard" style="padding:12px;margin-bottom:10px;border-left:3px solid ${statusColor};">
+            <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:800;font-size:13.5px;">${esc(r.display_name)} <span style="font-size:11px;color:var(--text-3);">@${esc(r.username)}</span></div>
+                <div style="font-size:11.5px;color:#d4d4d4;font-family:var(--font-m);margin-top:4px;">Telegram: ${esc(r.telegram||'-')}</div>
+                ${r.reason ? `<div style="font-size:11.5px;color:var(--text-2);margin-top:5px;padding:6px 9px;background:#1a1a1a;border-radius:6px;">${esc(r.reason)}</div>` : ''}
+                <div style="font-size:10.5px;color:var(--text-3);margin-top:5px;">${esc(when)}</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="color:${statusColor};font-size:11px;font-weight:800;text-transform:uppercase;margin-bottom:6px;"><i class="fa-solid ${statusIcon}"></i> ${esc(r.status)}</div>
+                ${isPending ? `<div style="display:flex;gap:5px;"><button class="act ok" onclick="admFreePlanAction('${esc(r.id)}','approve')"><i class="fa-solid fa-check"></i></button><button class="act danger" onclick="admFreePlanAction('${esc(r.id)}','reject')"><i class="fa-solid fa-xmark"></i></button></div>` : ''}
+              </div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+    } else if(sec==='users'){
+      const {d} = await api('/api/admin/users');
+      const users = d.users||[];
+      c.innerHTML = users.length===0 ? '<div class="empty"><h3>No Users</h3></div>' : users.map(u=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;">${esc(u.username)} <span class="tag" style="font-size:10px;">${esc(u.role)}</span>${u.free_plan_claimed?' <span class="tag" style="font-size:9px;">FREE USED</span>':''}</div><div style="font-size:11.5px;margin-top:5px;">Plan: <b style="color:#e5e5e5;">${esc(u.plan||'Free')}</b> • Slots: <b>${u.slots_used}/${u.slots}</b> • EXP: <b style="color:#f5f5f5;">+${fmt(u.total_gained_exp||0)}</b></div></div><div style="display:flex;gap:5px;"><button class="act" onclick="admEditUser('${esc(u.id)}', ${u.slots})"><i class="fa-solid fa-pen"></i></button><button class="act danger" onclick="admDeleteUser('${esc(u.id)}','${esc(u.username)}')"><i class="fa-solid fa-trash"></i></button></div></div></div>`).join('');
+    } else if(sec==='credentials'){
+      const {d} = await api('/api/admin/credentials');
+      const creds = d.credentials||[];
+      if(!creds.length){ c.innerHTML='<div class="empty"><h3>No Credentials</h3></div>'; return; }
+      c.innerHTML = creds.map((cr,i)=>`<div class="cred"><div class="cred-head"><h4><i class="fa-solid fa-user" style="color:#d4d4d4;"></i> ${esc(cr.nickname||'Unknown')}</h4><span class="tag" style="font-size:10px;">${esc(cr.status||'?')} • Lv.${cr.level||0}</span></div><div class="cred-row"><span class="cred-lbl">UID</span><span class="cred-val">${esc(cr.uid)}</span><button class="cred-btn" onclick="copyTo('${esc(cr.uid)}')"><i class="fa-solid fa-copy"></i></button></div>${cr.password?`<div class="cred-row"><span class="cred-lbl">Password</span><span class="cred-val pass" id="cp-${i}">${esc(cr.password)}</span><button class="cred-btn" onclick="copyTo(document.getElementById('cp-${i}').textContent)"><i class="fa-solid fa-copy"></i></button></div>`:''}${cr.has_token?`<div class="cred-row"><span class="cred-lbl">Token</span><span class="cred-val" style="color:#fbbf24;">${esc(cr.token||'')}</span></div>`:''}<div class="cred-row"><span class="cred-lbl">Owner</span><span class="cred-val" style="font-family:var(--font-b);">${esc(cr.owner_username||'?')}</span></div><div class="cred-row"><span class="cred-lbl">Gained</span><span class="cred-val" style="color:#f5f5f5;">+${fmt(cr.gained_exp||0)}</span></div></div>`).join('');
+    } else if(sec==='accounts'){
+      const {d} = await api('/api/admin/accounts');
+      const accs = d.accounts||[];
+      c.innerHTML = accs.length===0 ? '<div class="empty"><h3>No Accounts</h3></div>' : accs.map(a=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;">${esc(a.nickname)} <span style="font-size:11px;color:var(--text-3);font-family:var(--font-m);">(${esc(a.uid)})</span></div><div style="font-size:11.5px;color:var(--text-3);margin-top:3px;">Owner: <b>${esc(a.owner_username||'-')}</b> • ${esc(a.region)} • Lv.${a.level}</div></div><div style="color:#f5f5f5;font-family:var(--font-m);font-weight:700;">+${fmt(a.gained_exp||0)}</div></div></div>`).join('');
+    }
+  }catch(e){ c.innerHTML = '<div class="empty"><h3>Error</h3><p>'+esc(e.message)+'</p></div>'; }
+};
+
+window.admOrderAction = async(id,action)=>{
+  try{
+    const {d}=await api('/api/admin/orders/action',{method:'POST',body:JSON.stringify({order_id:id,action})});
+    if(d.status==='ok'){ toast(d.message,'success'); loadAdminSec('orders'); } else toast(d.error,'error');
+  }catch(e){ toast(e.message,'error'); }
+};
+
+window.admFreePlanAction = async(id, action)=>{
+  if(!confirm(action === 'approve' ? 'Approve free plan? 3 slots / 12h one-time.' : 'Reject?')) return;
+  try{
+    const {d} = await api('/api/admin/free-plan-action', {method:'POST', body: JSON.stringify({request_id: id, action})});
+    if(d.status === 'ok'){ toast(d.message || 'Done', 'success'); loadAdminSec('freeplans'); }
+    else toast(d.error || 'Failed', 'error');
+  }catch(e){ toast(e.message,'error'); }
+};
+
+window.admEditUser = async(uid, curSlots)=>{
+  const s = prompt('New slot limit:', curSlots);
+  if(s===null) return;
+  const h = prompt('Add subscription hours (0 = no change):','0');
+  try{
+    const {d}=await api('/api/admin/users/update',{method:'POST',body:JSON.stringify({user_id:uid, slots:parseInt(s), add_hours:parseInt(h||0)})});
+    if(d.status==='ok'){ toast('Updated','success'); loadAdminSec('users'); }
+    else toast(d.error,'error');
+  }catch(e){ toast(e.message,'error'); }
+};
+
+window.admDeleteUser = async(uid, uname)=>{
+  if(!confirm(`Delete "${uname}" permanently?`)) return;
+  try{
+    const {d} = await api('/api/admin/users/delete', {method:'POST', body: JSON.stringify({user_id: uid})});
+    if(d.status === 'ok'){ toast('Deleted','success'); loadAdminSec('users'); lastAccountsSig=''; fetchStats(); }
+    else toast(d.error || 'Failed','error');
+  }catch(e){ toast(e.message,'error'); }
+};
+
+async function loadFreePlanState(){
+  try{ const {d} = await api('/api/free-plan/status'); if(d.status==='ok') freePlanState = d; }catch(e){}
+}
+
+window.openFreePlanModal = async function(){
+  await loadFreePlanState();
+  const box = $('freePlanStatusBox');
+  const form = $('freePlanForm');
+  if(!freePlanState){ toast('Could not load status','error'); return; }
+  if(freePlanState.is_active && freePlanState.remaining_seconds > 0){
+    const h = Math.floor(freePlanState.remaining_seconds/3600);
+    const m = Math.floor((freePlanState.remaining_seconds%3600)/60);
+    box.style.display='block';
+    box.innerHTML = `<div style="background:#1a1a1a;border:1px solid var(--border-h);border-radius:8px;padding:11px;color:#f5f5f5;font-size:13px;font-weight:700;"><i class="fa-solid fa-check-circle"></i> Active — ${h}h ${m}m • ${freePlanState.slots} slots</div>`;
+    form.style.display='none'; openM('freePlanModal'); return;
+  }
+  if(freePlanState.has_pending){
+    box.style.display='block';
+    box.innerHTML = `<div style="background:rgba(245,158,11,.12);border:1px solid #f59e0b;border-radius:8px;padding:11px;color:#fbbf24;font-size:13px;font-weight:700;"><i class="fa-solid fa-hourglass-half"></i> Pending admin approval...</div>`;
+    form.style.display='none'; openM('freePlanModal'); return;
+  }
+  if(freePlanState.already_used){
+    box.style.display='block';
+    box.innerHTML = `<div style="background:rgba(239,68,68,.12);border:1px solid #ef4444;border-radius:8px;padding:11px;color:#f87171;font-size:13px;font-weight:700;"><i class="fa-solid fa-ban"></i> Already used. One-time only.</div>`;
+    form.style.display='none'; openM('freePlanModal'); return;
+  }
+  box.style.display='none'; form.style.display='block';
+  $('fpTg').value=''; $('fpReason').value='';
+  openM('freePlanModal');
+};
+
+window.submitFreePlanRequest = async function(e){
+  e.preventDefault();
+  const tg = $('fpTg').value.trim();
+  const reason = $('fpReason').value.trim();
+  if(!tg) return toast('Telegram required','warning');
+  const btn = $('btnFreePlanSubmit');
+  btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
+  try{
+    const {d} = await api('/api/free-plan/request', {method:'POST', body: JSON.stringify({telegram: tg, reason: reason})});
+    btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Request';
+    if(d.status === 'ok'){ toast(d.message || 'Sent!', 'success'); closeM('freePlanModal'); loadFreePlanState().then(updateFreePlanButton); }
+    else toast(d.error || 'Failed', 'error');
+  }catch(err){ btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send Request'; toast(err.message,'error'); }
+};
+
+async function updateFreePlanButton(){
+  const btn = $('btnFreePlan');
+  if(!btn) return;
+  await loadFreePlanState();
+  if(!freePlanState) return;
+  if(freePlanState.is_active && freePlanState.remaining_seconds > 0){
+    const h = Math.floor(freePlanState.remaining_seconds/3600);
+    const m = Math.floor((freePlanState.remaining_seconds%3600)/60);
+    btn.innerHTML = `<i class="fa-solid fa-check-circle"></i> Active: ${h}h ${m}m`;
+    btn.style.borderColor = 'var(--border-h)'; btn.style.color = '#f5f5f5';
+  } else if(freePlanState.has_pending){
+    btn.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> Pending...`;
+    btn.style.borderColor = '#f59e0b'; btn.style.color = '#fbbf24';
+  } else if(freePlanState.already_used){
+    btn.innerHTML = `<i class="fa-solid fa-ban"></i> Used`;
+    btn.style.borderColor = '#ef4444'; btn.style.color = '#f87171';
+  } else {
+    btn.innerHTML = `<i class="fa-solid fa-gift"></i> Claim Free Plan`;
+    btn.style.borderColor = ''; btn.style.color = '';
+  }
+}
+
+document.querySelectorAll('.modal').forEach(m=>{ m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('on'); }); });
+
+setLoader(false);
+checkAuth();
+</script>
+</body>
+</html>
