@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: nxc-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: ADMIN_PASSWORD
+        value: youadminpass
+      - key: PYTHON_VERSION
+        value: 3.11.9
+    autoDeploy: true
