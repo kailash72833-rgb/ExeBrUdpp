@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-NXC LEVEL UP - FreeFire Bot Web Dashboard Backend (Full)
+EXE LEVEL UP - FreeFire Bot Web Dashboard Backend (Full)
 Supports: user auth, plans, orders, admin panel, free plan requests,
           bulk account add, pause/restart, credentials download.
 Embedded Async Web Server (aiohttp)
@@ -1103,6 +1103,6 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     await site.start()
 
     print("\033[92m" + "=" * 60 + "\033[0m")
-    print(f"\033[92m[+] NXC Web Dashboard running on http://{host}:{port}\033[0m")
+    print(f"\033[92m[+] EXE Web Dashboard running on http://{host}:{port}\033[0m")
     print(f"\033[93m[!] Admin password: {ADMIN_PASSWORD}\033[0m")
     print("\033[92m" + "=" * 60 + "\033[0m")
