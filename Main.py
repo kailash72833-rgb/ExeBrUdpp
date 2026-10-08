@@ -2316,7 +2316,7 @@ def load_accounts():
 # ==================== MAIN ====================
 async def main():
     print_colored("=" * 60, Colors.CYAN)
-    print_colored("    NXC LEVEL UP - FreeFire Bot (Web Dashboard Mode)", Colors.GREEN)
+    print_colored("    EXE LEVEL UP - FreeFire Bot (Web Dashboard Mode)", Colors.GREEN)
     print_colored("   Persistent Device ID + TRUE Parallel + Smart DNS", Colors.WHITE)
     print_colored("=" * 60, Colors.CYAN)
     print_info(f"Start Match Interval: {START_MATCH_INTERVAL}s")
