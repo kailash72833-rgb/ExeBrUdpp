@@ -1048,7 +1048,7 @@ window.submitOrder = async(e)=>{
   const {d}=await api('/api/payments/zapupi/order',{method:'POST',body:JSON.stringify({plan_id: coPlan.id, user_telegram: tg})});
   if(d.status==='ok'){
     const gateway=d.gateway||{};
-    const checkoutUrl=gateway.payment_url||gateway.paymentUrl||gateway.checkout_url||gateway.checkoutUrl||gateway.payment_link||gateway.redirect_url||gateway.redirect||gateway.url||gateway.data?.payment_url||gateway.data?.paymentUrl||gateway.data?.checkout_url||gateway.data?.url||gateway.result?.payment_url||gateway.result?.url;
+    const checkoutUrl=d.payment_url||gateway.payment_url||gateway.paymentUrl||gateway.checkout_url||gateway.checkoutUrl||gateway.payment_link||gateway.redirect_url||gateway.redirect||gateway.url||gateway.data?.payment_url||gateway.data?.paymentUrl||gateway.data?.checkout_url||gateway.data?.url||gateway.result?.payment_url||gateway.result?.url;
     if(checkoutUrl){ window.location.assign(checkoutUrl); }
     else toast('ZapUPI order response missing payment URL. Please retry.','error');
   } else toast(d.error||'Payment gateway failed','error');

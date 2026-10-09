@@ -549,7 +549,16 @@ async def handle_zapupi_order(request: web.Request):
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"}, 400)
         order_id = "EXE-" + secrets.token_hex(8).upper()
-        payload = {"zap_key": ZAPUPI_API_KEY, "order_id": order_id, "amount": str(plan["price_inr"]), "remark": f"{plan['name']} | {user['username']}"}
+        payload = {
+            "zap_key": ZAPUPI_API_KEY,
+            "order_id": order_id,
+            "amount": float(plan["price_inr"]),
+            "customer_mobile": str(data.get("customer_mobile", "")).strip(),
+            "remark": f"{plan['name']} | {user['username']}",
+            "success_url": str(data.get("success_url", "")).strip(),
+            "failed_url": str(data.get("failed_url", "")).strip(),
+        }
+        payload = {k: v for k, v in payload.items() if v not in ("", None)}
         if ZAPUPI_WEBHOOK_URL:
             payload["webhook_url"] = ZAPUPI_WEBHOOK_URL
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -560,10 +569,14 @@ async def handle_zapupi_order(request: web.Request):
         if not isinstance(gateway_data, dict) or response.status >= 400:
             detail = gateway_data.get("message") or gateway_data.get("error") if isinstance(gateway_data, dict) else ""
             return _json({"status": "error", "error": detail or f"UPI gateway rejected the order ({response.status})"}, 502)
+        gateway_payload = gateway_data.get("data") if isinstance(gateway_data.get("data"), dict) else gateway_data
+        payment_url = gateway_payload.get("payment_url") or gateway_payload.get("paymentUrl") or gateway_payload.get("checkout_url") or gateway_payload.get("redirect_url")
+        if not payment_url:
+            return _json({"status": "error", "error": gateway_data.get("message") or "ZapUPI did not return payment_url", "gateway": gateway_data}, 502)
         orders = _load_json(ORDERS_FILE, [])
         orders.append({"id": order_id, "user_id": user["id"], "username": user["username"], "plan_id": plan["id"], "plan_name": plan["name"], "price_inr": plan["price_inr"], "payment_method": "ZapUPI", "status": "pending", "created_at": int(time.time()), "gateway": gateway_data})
         _save_json(ORDERS_FILE, orders)
-        return _json({"status": "ok", "order_id": order_id, "gateway": gateway_data})
+        return _json({"status": "ok", "order_id": order_id, "payment_url": payment_url, "gateway": gateway_data})
     except Exception:
         return _json({"status": "error", "error": "Unable to create UPI order"}, 502)
 
