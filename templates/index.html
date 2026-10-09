@@ -429,7 +429,10 @@ select.fin option{background:#141414;color:#fff;padding:10px}
     <section style="margin-bottom:22px;">
       <div class="sec-head">
         <div class="sec-title"><i class="fa-solid fa-gamepad"></i><span>Account Command</span><span class="badge" id="accBadge">0</span></div>
-        <button class="btn-outline" style="padding:7px 13px;font-size:12px;" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add</button>
+        <div style="display:flex;gap:7px;align-items:center;">
+  <button class="btn-outline" style="padding:7px 13px;font-size:12px;" onclick="refreshAllAccounts(this)" title="Refresh all account details"><i class="fa-solid fa-rotate"></i> Refresh</button>
+  <button class="btn-outline" style="padding:7px 13px;font-size:12px;" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add</button>
+  </div>
       </div>
       <div class="accounts" id="accList"></div>
     </section>
@@ -901,7 +904,7 @@ function renderAccounts(accs){
       </div>
       <div class="exp-grid"><div class="exp-item"><div class="lbl">Matches</div><div class="val">${matches}</div></div><div class="exp-item"><div class="lbl">Initial</div><div class="val">${fmt(acc.initial_exp||0)}</div></div><div class="exp-item"><div class="lbl">Current</div><div class="val">${fmt(curExp)}</div></div><div class="exp-item"><div class="lbl">Gained</div><div class="val gain">+${fmt(gained)}</div></div></div>
       <div class="acard-actions">
-        <div class="updated">Updated: ${esc(acc.last_updated||'Active')}</div>
+        <div class="updated">Updated: ${acc.last_updated_at ? new Date(acc.last_updated_at*1000).toLocaleString() : esc(acc.last_updated||'Active')}</div>
         <div class="acts">
           <button class="act ${paused?'ok':'warn'}" onclick="togglePause('${esc(uid)}')"><i class="fa-solid ${paused?'fa-play':'fa-pause'}"></i> ${paused?'Resume':'Pause'}</button>
           <button class="act" onclick="refreshAcc('${esc(uid)}')"><i class="fa-solid fa-rotate"></i></button>
@@ -915,7 +918,9 @@ function renderAccounts(accs){
 }
 
 window.togglePause = async(uid)=>{ try{ const {d}=await api('/api/account/pause',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast(d.message||'Toggled','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
-window.refreshAcc = async(uid)=>{ try{ toast('Refreshing...','info'); await api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid})}); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },800); }catch(e){ toast(e.message,'error'); } };
+  window.refreshAcc = async(uid)=>{ try{ toast('Refreshing...','info'); await api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid})}); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },800); }catch(e){ toast(e.message,'error'); } };
+  window.refreshAllAccounts = async(btn)=>{ try{ if(btn){btn.disabled=true;btn.classList.add('spin');} toast('Refreshing all account details...','info'); const {d}=await api('/api/account/refresh-all',{method:'POST',body:JSON.stringify({})}); if(d.status==='ok'){ lastAccountsSig=''; await fetchStats(); toast(`Refreshed ${d.refreshed||0} account(s)`,'success'); } else toast(d.error||'Refresh failed','error'); }catch(e){ toast(e.message,'error'); }finally{ if(btn){btn.disabled=false;btn.classList.remove('spin');} } };
+  window.refreshAllAccounts = async(btn)=>{ const icon=btn?.querySelector('i'); if(icon) icon.classList.add('fa-spin'); try{ const accounts=(botData?.accounts||[]); await Promise.all(accounts.map(a=>api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid:a.uid})}))); lastAccountsSig=''; await fetchStats(); toast('All account details refreshed','success'); }catch(e){ toast(e.message,'error'); } finally{ if(icon) icon.classList.remove('fa-spin'); } };
 window.restartAcc = async(uid)=>{ if(!confirm('Restart bot for '+uid+'?')) return; try{ const {d}=await api('/api/account/restart',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Restarting...','success'); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },1200); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
 window.deleteAcc = async(uid)=>{ if(!confirm('Delete '+uid+'?')) return; try{ const {d}=await api('/api/account/delete',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Deleted','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
 

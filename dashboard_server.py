@@ -135,7 +135,8 @@ class BotState:
                 "matches_played": 0,
                 "active_matches": 0,
                 "last_match_time": None,
-                "last_updated": time.strftime("%H:%M:%S"),
+                "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_updated_at": int(time.time()),
                 "owner_user_id": owner_user_id,
                 "owner_username": owner_username,
             }
@@ -151,7 +152,8 @@ class BotState:
             if mode: acc["mode"] = mode
             if owner_user_id: acc["owner_user_id"] = owner_user_id
             if owner_username: acc["owner_username"] = owner_username
-            acc["last_updated"] = time.strftime("%H:%M:%S")
+            acc["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            acc["last_updated_at"] = int(time.time())
         self.recalc_totals()
 
     def update_exp(self, uid: str, current_exp: int, level: Optional[int] = None):
@@ -163,7 +165,8 @@ class BotState:
             if level is not None and level > 0:
                 acc["level"] = level
             acc["gained_exp"] = max(0, current_exp - acc["initial_exp"])
-            acc["last_updated"] = time.strftime("%H:%M:%S")
+            acc["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            acc["last_updated_at"] = int(time.time())
             diff = current_exp - old_exp
             if diff > 0:
                 self.log(f"{acc['nickname']} gained +{diff} EXP! Total: +{acc['gained_exp']}", "success", uid_str)
@@ -175,7 +178,8 @@ class BotState:
             self.accounts[uid_str]["status"] = status
             if active_matches is not None:
                 self.accounts[uid_str]["active_matches"] = active_matches
-            self.accounts[uid_str]["last_updated"] = time.strftime("%H:%M:%S")
+            self.accounts[uid_str]["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.accounts[uid_str]["last_updated_at"] = int(time.time())
 
     def increment_match(self, uid: str):
         uid_str = str(uid)
@@ -183,7 +187,8 @@ class BotState:
         if uid_str in self.accounts:
             self.accounts[uid_str]["matches_played"] += 1
             self.accounts[uid_str]["last_match_time"] = time.strftime("%H:%M:%S")
-            self.accounts[uid_str]["last_updated"] = time.strftime("%H:%M:%S")
+            self.accounts[uid_str]["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.accounts[uid_str]["last_updated_at"] = int(time.time())
 
     def recalc_totals(self):
         self.total_gained_exp = sum(acc.get("gained_exp", 0) for acc in self.accounts.values())
@@ -866,9 +871,17 @@ async def handle_account_delete(request: web.Request):
 
         if uid and uid in bot_state.accounts:
             if is_admin or (user and bot_state.accounts[uid].get("owner_user_id") == user["id"]):
-                worker = bot_state.account_workers.pop(uid, None)
-                if worker:
-                    worker.cancel()
+                account = bot_state.accounts[uid]
+                worker_keys = {uid, str(account.get("token", ""))[:10]}
+                workers_to_cancel = []
+                for worker_key, worker in list(bot_state.account_workers.items()):
+                    if worker_key in worker_keys or worker_key == uid or (token and worker_key == token[:10]):
+                        bot_state.account_workers.pop(worker_key, None)
+                        if worker and not worker.done():
+                            worker.cancel()
+                            workers_to_cancel.append(worker)
+                if workers_to_cancel:
+                    await asyncio.gather(*workers_to_cancel, return_exceptions=True)
                 bot_state._paused.pop(uid, None)
                 bot_state.account_credentials.pop(uid, None)
                 del bot_state.accounts[uid]
@@ -876,6 +889,21 @@ async def handle_account_delete(request: web.Request):
 
         bot_state.log(f"Node {uid or token[:10]} removed", "warning", uid)
         return _json({"status": "ok"})
+    except Exception as e:
+        return _json({"status": "error", "error": str(e)})
+
+
+async def handle_account_refresh_all(request: web.Request):
+    user = _get_user(request)
+    is_admin = _get_admin(request)
+    if not user and not is_admin:
+        return _json({"status": "error", "error": "Not authenticated"}, 401)
+    try:
+        accounts = [a for a in bot_state.accounts.values() if is_admin or a.get("owner_user_id") == user["id"]]
+        callback = bot_state.refresh_callbacks.get("on_refresh_account")
+        if callback:
+            await asyncio.gather(*(callback(str(a.get("uid"))) for a in accounts), return_exceptions=True)
+        return _json({"status": "ok", "refreshed": len(accounts)})
     except Exception as e:
         return _json({"status": "error", "error": str(e)})
 
@@ -1245,6 +1273,7 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     r.add_post("/api/account/bulk-add", handle_account_bulk_add)
     r.add_post("/api/account/delete", handle_account_delete)
     r.add_post("/api/account/refresh", handle_account_refresh)
+    r.add_post("/api/account/refresh-all", handle_account_refresh_all)
     r.add_post("/api/account/restart", handle_account_restart)
     r.add_post("/api/account/pause", handle_account_pause)
 
