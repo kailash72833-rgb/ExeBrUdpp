@@ -786,16 +786,15 @@ async def handle_account_delete(request: web.Request):
         accounts = [a for a in accounts if not matches(a)]
         _write_accounts(accounts)
 
-    if uid and uid in bot_state.accounts:
-        if is_admin or (user and bot_state.accounts[uid].get("owner_user_id") == user["id"]):
-            worker = bot_state.account_workers.pop(uid, None)
-            if worker:
-                worker.cancel()
-            bot_state._paused.pop(uid, None)
-            bot_state.account_credentials.pop(uid, None)
-            del bot_state.accounts[uid]
-            bot_state.recalc_totals()
-
+        if uid and uid in bot_state.accounts:
+            if is_admin or (user and bot_state.accounts[uid].get("owner_user_id") == user["id"]):
+                worker = bot_state.account_workers.pop(uid, None)
+                if worker:
+                    worker.cancel()
+                bot_state._paused.pop(uid, None)
+                bot_state.account_credentials.pop(uid, None)
+                del bot_state.accounts[uid]
+                bot_state.recalc_totals()
 
         bot_state.log(f"Node {uid or token[:10]} removed", "warning", uid)
         return _json({"status": "ok"})
