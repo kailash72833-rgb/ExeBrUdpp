@@ -558,7 +558,8 @@ async def handle_zapupi_order(request: web.Request):
             async with session.post(ZAPUPI_CREATE_ORDER_URL, json=payload, headers=headers) as response:
                 gateway_data = await response.json(content_type=None)
         if not isinstance(gateway_data, dict) or response.status >= 400:
-            return _json({"status": "error", "error": "UPI gateway rejected the order"}, 502)
+            detail = gateway_data.get("message") or gateway_data.get("error") if isinstance(gateway_data, dict) else ""
+            return _json({"status": "error", "error": detail or f"UPI gateway rejected the order ({response.status})"}, 502)
         orders = _load_json(ORDERS_FILE, [])
         orders.append({"id": order_id, "user_id": user["id"], "username": user["username"], "plan_id": plan["id"], "plan_name": plan["name"], "price_inr": plan["price_inr"], "payment_method": "ZapUPI", "status": "pending", "created_at": int(time.time()), "gateway": gateway_data})
         _save_json(ORDERS_FILE, orders)
