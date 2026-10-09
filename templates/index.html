@@ -312,11 +312,8 @@ select.fin option{background:#141414;color:#fff;padding:10px}
   .console{height:calc(100vh - 200px)}
   }
   /* EXE LEVEL UP light product theme */
-  :root{--bg:#f5f8ff;--card:#ffffff;--card-2:#eef4ff;--border:#dbe5f5;--border-h:#9bb8e8;--text:#14213d;--text-2:#52627d;--text-3:#7b8aa3;--btn:#2563eb;--btn-txt:#ffffff;--accent:#2563eb;--accent-2:#60a5fa;--r:16px}
-  body{background:linear-gradient(145deg,#f8fbff 0%,#edf4ff 100%);color:var(--text)}
-  .sidebar{background:#102a56;border-right-color:#1d4380}.sb-brand h2,.brand h1{color:#fff}.sb-brand h2 span,.brand h1 span{color:#9fc2ff}.sb-item{color:#c8dcff}.sb-item:hover{background:#1d4380;color:#fff}.sb-item.active{background:#fff;color:#16458f}.sb-user,.sb-btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);color:#e7f0ff}.sb-btn.grad,.sb-icon,.brand-icon,.avatar{background:#fff;color:#17458f}.sb-btn.danger{color:#fecaca}
-  header.top,.card,.plan,.order,.contact,.cred{background:rgba(255,255,255,.92);box-shadow:0 10px 30px rgba(37,99,235,.07)}
-  .btn-primary,.btn-buy,.btn-submit{background:#2563eb;color:#fff;box-shadow:0 8px 18px rgba(37,99,235,.2)}.btn-primary:hover,.btn-buy:hover,.btn-submit:hover{background:#1d4ed8}.btn-outline{color:#16458f;border-color:#bfd0ea}.tag,.exp-grid,.act,.fbtn,.asub-btn{background:#f3f7ff;border-color:#dbe5f5;color:#52627d}.track{background:#e6eefc}.fill{background:#2563eb}.auth-box{background:#fff;border-color:#dbe5f5;box-shadow:0 18px 45px rgba(37,99,235,.12)}.auth-logo{background:#2563eb;box-shadow:0 10px 22px rgba(37,99,235,.22)}
+  :root{--bg:#f3f7ff;--card:#fff;--card-2:#eef4ff;--border:#d5e1f3;--border-h:#9cb9e5;--text:#14213d;--text-2:#536784;--text-3:#7c8da8;--btn:#2563eb;--btn-txt:#fff;--accent:#2563eb;--accent-2:#60a5fa;--r:16px}
+  html,body{background:#f3f7ff !important;color:#14213d !important}.auth{background:linear-gradient(145deg,#f8fbff,#eaf2ff) !important}.auth-box{background:#fff !important;border:1px solid #d5e1f3 !important;box-shadow:0 18px 45px rgba(37,99,235,.12) !important}.auth-logo{background:#2563eb !important;color:#fff !important;box-shadow:0 10px 22px rgba(37,99,235,.22)}.auth-head h2{color:#14213d}.auth-head p{color:#536784}.tabs{background:#f4f7fc;border:1px solid #e0e8f5}.tab-btn{color:#536784}.tab-btn.active{background:#fff;color:#2563eb;box-shadow:0 2px 8px rgba(20,33,61,.1)}.fin{background:#fff !important;color:#14213d !important;border-color:#d5e1f3 !important}.fin::placeholder{color:#9aa8bc}.flbl{color:#14213d}.sidebar{background:#102a56}.sb-brand h2,.brand h1{color:#fff}.sb-brand h2 span,.brand h1 span{color:#9fc2ff}.sb-item{color:#c8dcff}.sb-item.active{background:#fff;color:#16458f}.sb-user,.sb-btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);color:#e7f0ff}header.top,.card,.plan,.order,.contact,.cred{background:#fff !important;border-color:#d5e1f3;box-shadow:0 10px 30px rgba(37,99,235,.07)}.btn-primary,.btn-buy,.btn-submit{background:#2563eb !important;color:#fff !important;box-shadow:0 8px 18px rgba(37,99,235,.2)}.btn-outline{color:#16458f;border-color:#bfd0ea}.tag,.exp-grid,.act,.fbtn,.asub-btn{background:#f3f7ff;border-color:#dbe5f5;color:#52627d}.track{background:#e6eefc}.fill{background:#2563eb}.stat-val,.hero-num,.aname,.plan h3,.order h4,.contact h4,.sec-title,.mhead h3{color:#14213d}.hero-meta h2,.hero-meta p,.stat-label,.updated,.empty p,.plan .dur,.plan .feats li,.order p,.contact p{color:#536784}.modal .mbox{background:#fff !important;border-color:#d5e1f3}  .modal .mhead{color:#14213d}.gateway-card{display:flex;align-items:center;gap:12px;background:#eff6ff;border:1px solid #bfd5f5;border-radius:12px;padding:14px;color:#16458f;margin:8px 0 14px}.gateway-card i{font-size:22px;color:#2563eb}.gateway-card div{display:flex;flex-direction:column;gap:3px}.gateway-card span{font-size:11px;color:#536784}.checkoutModal #co-usd,.checkoutModal #coBIN{display:none !important}
 </style>
 </head>
 <body>
@@ -586,22 +583,10 @@ select.fin option{background:#141414;color:#fff;padding:10px}
     </div>
     <div class="tabs">
       <button type="button" class="tab-btn active" id="co-inr" onclick="setCoMethod('INR')"><i class="fa-solid fa-indian-rupee-sign"></i> UPI</button>
-      <button type="button" class="tab-btn" id="co-usd" onclick="setCoMethod('USD')"><i class="fa-brands fa-bitcoin"></i> Binance</button>
     </div>
-    <div id="coUPI">
-      <div style="text-align:center;margin:6px 0 12px;">
-        <div style="background:#fff;padding:10px;border-radius:14px;display:inline-block;">
-          <img id="coQR" alt="UPI QR" style="width:180px;height:180px;object-fit:contain;display:block;border-radius:6px;">
-        </div>
-      </div>
-      <div style="background:#1a1a1a;border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
-        <div style="min-width:0;">
-          <div style="font-size:10px;color:var(--text-3);font-weight:700;text-transform:uppercase;">UPI ID</div>
-          <div style="font-family:var(--font-m);font-size:12.5px;font-weight:700;margin-top:2px;word-break:break-all;" id="coUPIID">lxkazi451@okhdfcbank</div>
-        </div>
-        <button type="button" class="act" onclick="copyTo(BOT.upi_id)"><i class="fa-solid fa-copy"></i></button>
-      </div>
-    </div>
+  <div id="coUPI">
+    <div class="gateway-card"><i class="fa-solid fa-shield-halved"></i><div><b>Secure ZapUPI checkout</b><span>You will be redirected to the protected UPI payment page.</span></div></div>
+  </div>
     <div id="coBIN" style="display:none;">
       <div style="background:rgba(245,158,11,.08);border:1px solid var(--amber);border-radius:8px;padding:12px;margin-bottom:12px;">
         <span style="display:inline-flex;align-items:center;gap:6px;background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid var(--amber);padding:3px 9px;border-radius:14px;font-size:10.5px;font-weight:800;"><i class="fa-solid fa-coins"></i> BINANCE PAY</span>
@@ -615,11 +600,10 @@ select.fin option{background:#141414;color:#fff;padding:10px}
         <div style="font-size:11px;color:var(--text-2);line-height:1.6;">Amount: <b id="coBINAmt">$0.00 USDT</b></div>
       </div>
     </div>
-    <form onsubmit="submitOrder(event)">
-      <div class="fg"><label class="flbl">Transaction ID / UTR *</label><input type="text" class="fin" id="coTxn" placeholder="e.g. 412389471928" required></div>
-      <div class="fg"><label class="flbl">Your Telegram</label><input type="text" class="fin" id="coTG" placeholder="@username"></div>
-      <button type="submit" class="btn-submit"><i class="fa-solid fa-check"></i> Submit for Verification</button>
-    </form>
+  <form onsubmit="submitOrder(event)">
+  <div class="fg"><label class="flbl">Your Telegram (optional)</label><input type="text" class="fin" id="coTG" placeholder="@username"></div>
+  <button type="submit" class="btn-submit"><i class="fa-solid fa-lock"></i> Pay Securely with ZapUPI</button>
+  </form>
   </div>
 </div>
 
@@ -1057,7 +1041,6 @@ window.buyPlan = (id)=>{
   coPlan = p;
   $('coName').innerText = p.name;
   $('coDetails').innerText = `${p.slots} Accounts • ${p.duration_text||''}`;
-  $('coTxn').value='';
   $('coTG').value = (user && user.username) ? '@'+user.username : '';
   setCoMethod('INR');
   openM('checkoutModal');
@@ -1083,13 +1066,15 @@ window.setCoMethod = (m)=>{
 window.submitOrder = async(e)=>{
   e.preventDefault();
   if(!coPlan) return;
-  const txn = $('coTxn').value.trim();
   const tg = $('coTG').value.trim();
-  if(!txn) return toast('Enter transaction ID','warning');
   try{
-    const {d}=await api('/api/plans/order',{method:'POST',body:JSON.stringify({plan_id: coPlan.id, transaction_id: txn, user_telegram: tg, payment_method: coMethod==='USD' ? 'Binance Pay':'UPI'})});
-    if(d.status==='ok'){ toast('Order submitted','success'); closeM('checkoutModal'); goTo('history'); }
-    else toast(d.error||'Failed','error');
+  const {d}=await api('/api/payments/zapupi/order',{method:'POST',body:JSON.stringify({plan_id: coPlan.id, user_telegram: tg})});
+  if(d.status==='ok'){
+    const gateway=d.gateway||{};
+    const checkoutUrl=gateway.payment_url||gateway.checkout_url||gateway.url||gateway.data?.payment_url;
+    if(checkoutUrl){ window.open(checkoutUrl,'_blank','noopener,noreferrer'); toast('Secure payment page opened','success'); closeM('checkoutModal'); }
+    else toast('Gateway order created. Payment link was not returned.','warning');
+  } else toast(d.error||'Payment gateway failed','error');
   }catch(e){ toast(e.message,'error'); }
 };
 
