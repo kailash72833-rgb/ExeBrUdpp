@@ -303,7 +303,8 @@ select.fin option{background:#141414;color:#fff;padding:10px}
   .hero-in{flex-direction:column;align-items:stretch}
   .hero-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
   .hero-actions .btn-primary,.hero-actions .btn-outline{justify-content:center;padding:9px 8px;font-size:12px}
-  .stats{grid-template-columns:repeat(2,1fr) !important}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+  .stats .stat.p{grid-column:1 / -1}
   .stat-val{font-size:18px}
   .acts .act{flex:1 1 auto;justify-content:center}
   .feed{max-height:calc(100vh - 320px);font-size:10.5px}
@@ -313,7 +314,7 @@ select.fin option{background:#141414;color:#fff;padding:10px}
   }
   /* EXE LEVEL UP light product theme */
   :root{--bg:#f3f7ff;--card:#fff;--card-2:#eef4ff;--border:#d5e1f3;--border-h:#9cb9e5;--text:#14213d;--text-2:#536784;--text-3:#7c8da8;--btn:#2563eb;--btn-txt:#fff;--accent:#2563eb;--accent-2:#60a5fa;--r:16px}
-  html,body{background:#f3f7ff !important;color:#14213d !important}.auth{background:linear-gradient(145deg,#f8fbff,#eaf2ff) !important}.auth-box{background:#fff !important;border:1px solid #d5e1f3 !important;box-shadow:0 18px 45px rgba(37,99,235,.12) !important}.auth-logo{background:#2563eb !important;color:#fff !important;box-shadow:0 10px 22px rgba(37,99,235,.22)}.auth-head h2{color:#14213d}.auth-head p{color:#536784}.tabs{background:#f4f7fc;border:1px solid #e0e8f5}.tab-btn{color:#536784}.tab-btn.active{background:#fff;color:#2563eb;box-shadow:0 2px 8px rgba(20,33,61,.1)}.fin{background:#fff !important;color:#14213d !important;border-color:#d5e1f3 !important}.fin::placeholder{color:#9aa8bc}.flbl{color:#14213d}.sidebar{background:#102a56}.sb-brand h2,.brand h1{color:#fff}.sb-brand h2 span,.brand h1 span{color:#9fc2ff}.sb-item{color:#c8dcff}.sb-item.active{background:#fff;color:#16458f}.sb-user,.sb-btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);color:#e7f0ff}header.top,.card,.plan,.order,.contact,.cred{background:#fff !important;border-color:#d5e1f3;box-shadow:0 10px 30px rgba(37,99,235,.07)}.btn-primary,.btn-buy,.btn-submit{background:#2563eb !important;color:#fff !important;box-shadow:0 8px 18px rgba(37,99,235,.2)}.btn-outline{color:#16458f;border-color:#bfd0ea}.tag,.exp-grid,.act,.fbtn,.asub-btn{background:#f3f7ff;border-color:#dbe5f5;color:#52627d}.track{background:#e6eefc}.fill{background:#2563eb}.stat-val,.hero-num,.aname,.plan h3,.order h4,.contact h4,.sec-title,.mhead h3{color:#14213d}.hero-meta h2,.hero-meta p,.stat-label,.updated,.empty p,.plan .dur,.plan .feats li,.order p,.contact p{color:#536784}.modal .mbox{background:#fff !important;border-color:#d5e1f3}  .modal .mhead{color:#14213d}.gateway-card{display:flex;align-items:center;gap:12px;background:#eff6ff;border:1px solid #bfd5f5;border-radius:12px;padding:14px;color:#16458f;margin:8px 0 14px}.gateway-card i{font-size:22px;color:#2563eb}.gateway-card div{display:flex;flex-direction:column;gap:3px}.gateway-card span{font-size:11px;color:#536784}.checkoutModal #co-usd,.checkoutModal #coBIN{display:none !important}
+  html,body{background:#f3f7ff !important;color:#14213d !important}.auth{background:linear-gradient(145deg,#f8fbff,#eaf2ff) !important}.auth-box{background:#fff !important;border:1px solid #d5e1f3 !important;box-shadow:0 18px 45px rgba(37,99,235,.12) !important}.auth-logo{background:#2563eb !important;color:#fff !important;box-shadow:0 10px 22px rgba(37,99,235,.22)}.auth-head h2{color:#14213d}.auth-head p{color:#536784}.tabs{background:#f4f7fc;border:1px solid #e0e8f5}.tab-btn{color:#536784}.tab-btn.active{background:#fff;color:#2563eb;box-shadow:0 2px 8px rgba(20,33,61,.1)}.fin{background:#fff !important;color:#14213d !important;border-color:#d5e1f3 !important}.fin::placeholder{color:#9aa8bc}.flbl{color:#14213d}.sidebar{background:#102a56}.sb-brand h2,.brand h1{color:#fff}.sb-brand h2 span,.brand h1 span{color:#9fc2ff}.sb-item{color:#c8dcff}.sb-item.active{background:#fff;color:#16458f}.sb-user,.sb-btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);color:#e7f0ff}header.top,.card,.plan,.order,.contact,.cred{background:#fff !important;border-color:#d5e1f3;box-shadow:0 10px 30px rgba(37,99,235,.07)}.btn-primary,.btn-buy,.btn-submit{background:#2563eb !important;color:#fff !important;box-shadow:0 8px 18px rgba(37,99,235,.2)}.btn-outline{color:#16458f;border-color:#bfd0ea}.tag,.exp-grid,.act,.fbtn,.asub-btn{background:#f3f7ff;border-color:#dbe5f5;color:#52627d}.track{background:#e6eefc}.fill{background:#2563eb}.stat-val,.hero-num,.aname,.plan h3,.order h4,.contact h4,.sec-title,.mhead h3{color:#14213d}.hero-meta h2,.hero-meta p,.stat-label,.updated,.empty p,.plan .dur,.plan .feats li,.order p,.contact p{color:#536784}.modal .mbox{background:#fff !important;border-color:#d5e1f3}  .modal .mhead{color:#14213d}.auth-switch{display:block;width:100%;margin:14px 0 0;border:0;background:transparent;color:#2563eb;font:600 12px var(--font-h);cursor:pointer}.auth-switch:hover{text-decoration:underline}#app,#app *{--text:#14213d;--text-2:#536784;--text-3:#7c8da8}#app .card,#app .plan,#app .order,#app .contact,#app .cred,#app .exp-grid,#app .act,#app .fbtn,#app .asub-btn{background:#fff!important;border-color:#d5e1f3!important;color:#14213d!important}#app .console,#app .console-top,#app .feed{background:#fff!important;color:#14213d!important}#app .console-top{border-bottom-color:#d5e1f3!important}#app .console-title,#app .log-msg.info,#app .stat-label,#app .updated,#app .empty p,#app .plan .dur,#app .plan .feats li,#app .order p,#app .contact p{color:#536784!important}#app .plan .price .main,#app .exp-item .val,#app .hero-num,#app .stat-val,#app .sec-title,#app .aname{color:#14213d!important}#app .track{background:#e6eefc!important}#app .fill{background:#2563eb!important}.gateway-card{display:flex;align-items:center;gap:12px;background:#eff6ff;border:1px solid #bfd5f5;border-radius:12px;padding:14px;color:#16458f;margin:8px 0 14px}.gateway-card i{font-size:22px;color:#2563eb}.gateway-card div{display:flex;flex-direction:column;gap:3px}.gateway-card span{font-size:11px;color:#536784}.checkoutModal #co-usd,.checkoutModal #coBIN{display:none !important}
 </style>
 </head>
 <body>
@@ -368,6 +369,7 @@ select.fin option{background:#141414;color:#fff;padding:10px}
       <div class="fg"><label class="flbl" for="si-identity">Gmail or username</label><input type="text" class="fin" id="si-identity" required autocapitalize="none" autocomplete="username"></div>
       <div class="fg"><label class="flbl" for="si-pass">Password</label><input type="password" class="fin" id="si-pass" required autocomplete="current-password"></div>
       <button type="submit" class="btn-submit" id="btn-si">Sign In →</button>
+      <button type="button" class="auth-switch" onclick="switchAuth('signup')">New here? Create an account</button>
     </form>
     <form id="form-signup" style="display:none;" onsubmit="doRegister(event)">
       <div class="fg"><label class="flbl" for="su-user">Username</label><input type="text" class="fin" id="su-user" required autocapitalize="none" autocomplete="username"></div>
@@ -375,6 +377,7 @@ select.fin option{background:#141414;color:#fff;padding:10px}
       <div class="fg"><label class="flbl" for="su-pass">Password (min 8 chars)</label><input type="password" class="fin" id="su-pass" required minlength="8" autocomplete="new-password"></div>
       <div class="fg"><label class="flbl" for="su-confirm">Confirm password</label><input type="password" class="fin" id="su-confirm" required minlength="8" autocomplete="new-password"></div>
       <button type="submit" class="btn-submit" id="btn-su">Create Account →</button>
+      <button type="button" class="auth-switch" onclick="switchAuth('signin')">Already have an account? Sign in</button>
     </form>
   </div>
 </div>
@@ -404,9 +407,8 @@ select.fin option{background:#141414;color:#fff;padding:10px}
           </div>
         </div>
         <div class="hero-actions">
-          <button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button>
-          <button class="btn-outline" id="btnFreePlan" onclick="openFreePlanModal()"><i class="fa-solid fa-gift"></i> Claim Free Plan</button>
-          <button class="btn-outline" onclick="goTo('buy')"><i class="fa-solid fa-bolt"></i> Upgrade</button>
+  <button class="btn-outline" onclick="goTo('buy')"><i class="fa-solid fa-bolt"></i> Upgrade</button>
+  <button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button>
         </div>
       </div>
     </section>
@@ -495,8 +497,7 @@ select.fin option{background:#141414;color:#fff;padding:10px}
     </section>
     <div class="asub">
       <button class="asub-btn active" data-sec="orders" onclick="loadAdminSec('orders',this)"><i class="fa-solid fa-receipt"></i> Orders</button>
-      <button class="asub-btn" data-sec="freeplans" onclick="loadAdminSec('freeplans',this)"><i class="fa-solid fa-gift"></i> Free Plan Requests <span id="freePlanCountBadge" class="trial-badge" style="display:none;">0</span></button>
-      <button class="asub-btn" data-sec="users" onclick="loadAdminSec('users',this)"><i class="fa-solid fa-user-gear"></i> Users</button>
+          <button class="asub-btn" data-sec="users" onclick="loadAdminSec('users',this)"><i class="fa-solid fa-user-gear"></i> Users</button>
       <button class="asub-btn" data-sec="credentials" onclick="loadAdminSec('credentials',this)"><i class="fa-solid fa-key"></i> Credentials</button>
       <button class="asub-btn" data-sec="accounts" onclick="loadAdminSec('accounts',this)"><i class="fa-solid fa-layer-group"></i> Accounts</button>
       <button class="asub-btn" onclick="downloadCreds()" style="background:#e5e5e5;color:#0a0a0a;border-color:transparent;font-weight:700;"><i class="fa-solid fa-download"></i> Download ZIP</button>
@@ -686,7 +687,7 @@ async function doLogin(e){
   const u=$('si-identity').value.trim().toLowerCase(), p=$('si-pass').value;
   const btn=$('btn-si'); btn.disabled=true; setLoader(true,'SIGNING IN...');
   try{
-    const r=await fetch('/api/user/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const r=await fetch('/api/user/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identity:u,username:u,password:p})});
     const d=await r.json(); setLoader(false); btn.disabled=false;
     if(d.status==='ok' && d.token){ token=d.token; user=d.user; localStorage.setItem('nxc_token', token); toast('Welcome '+user.username,'success'); enterApp(); }
     else toast(d.error||'Login failed','error');
@@ -998,37 +999,11 @@ window.submitAccount = async(e)=>{
   btn.disabled = false;
 };
 
-async function loadPlans(){ try{ const {d}=await api('/api/plans'); if(d.status==='ok'){ allPlans=d.plans||[]; renderPlans(); } }catch(e){} }
+async function loadPlans(){ try{ const {d}=await api('/api/plans'); if(d.status==='ok'){ allPlans=(d.plans||[]).filter(p=>p.id!=='free' && Number(p.price_inr)>0); renderPlans(); } }catch(e){} }
 
 function renderPlans(){
   const box=$('plansList');
   let html = '';
-  const fp = freePlanState;
-  const fpActive = fp && fp.is_active && fp.remaining_seconds > 0;
-  const fpPending = fp && fp.has_pending;
-  const fpUsed = fp && fp.already_used;
-  let fpBtnText = '<i class="fa-solid fa-gift"></i> Claim Free Plan';
-  let fpBtnAction = 'openFreePlanModal()';
-  let fpBtnDisabled = false;
-  if(fpActive){ fpBtnText = '<i class="fa-solid fa-check-circle"></i> Active'; fpBtnDisabled = true; }
-  else if(fpPending){ fpBtnText = '<i class="fa-solid fa-hourglass-half"></i> Pending'; fpBtnDisabled = true; }
-  else if(fpUsed){ fpBtnText = '<i class="fa-solid fa-ban"></i> Already Used'; fpBtnDisabled = true; }
-
-  html += `<div class="plan free">
-    <div class="plan-badge">FREE</div>
-    <div class="plan-icon"><i class="fa-solid fa-gift"></i></div>
-    <h3>Free Plan</h3>
-    <p class="dur">One-time • 12 Hours</p>
-    <div class="price"><span class="main">₹0</span><span class="alt">/ Free</span></div>
-    <ul class="feats">
-      <li><i class="fa-solid fa-circle-check"></i> <span>3 concurrent accounts</span></li>
-      <li><i class="fa-solid fa-circle-check"></i> <span>12 hours runtime</span></li>
-      <li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li>
-      <li><i class="fa-solid fa-circle-check"></i> <span>Admin approval</span></li>
-    </ul>
-    <button class="btn-buy free" onclick="${fpBtnAction}" ${fpBtnDisabled?'disabled':''}>${fpBtnText}</button>
-  </div>`;
-
   if(allPlans.length){
     html += allPlans.map(p=>`<div class="plan ${p.popular?'pop':''}">${p.badge?`<div class="plan-badge">${esc(p.badge)}</div>`:''}<div class="plan-icon"><i class="fa-solid fa-bolt"></i></div><h3>${esc(p.name)}</h3><p class="dur">${esc(p.duration_text||'')}</p><div class="price"><span class="main">₹${p.price_inr}</span><span class="alt">/ $${p.price_usd}</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>${p.slots} accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li><li><i class="fa-solid fa-circle-check"></i> <span>${esc(p.duration_text)}</span></li></ul><button class="btn-buy" onclick="buyPlan('${esc(p.id)}')"><i class="fa-solid fa-bolt"></i> Buy Now</button></div>`).join('');
   }
@@ -1071,7 +1046,7 @@ window.submitOrder = async(e)=>{
   const {d}=await api('/api/payments/zapupi/order',{method:'POST',body:JSON.stringify({plan_id: coPlan.id, user_telegram: tg})});
   if(d.status==='ok'){
     const gateway=d.gateway||{};
-    const checkoutUrl=gateway.payment_url||gateway.checkout_url||gateway.url||gateway.data?.payment_url;
+    const checkoutUrl=gateway.payment_url||gateway.checkout_url||gateway.payment_link||gateway.redirect_url||gateway.url||gateway.data?.payment_url||gateway.data?.checkout_url||gateway.result?.payment_url;
     if(checkoutUrl){ window.open(checkoutUrl,'_blank','noopener,noreferrer'); toast('Secure payment page opened','success'); closeM('checkoutModal'); }
     else toast('Gateway order created. Payment link was not returned.','warning');
   } else toast(d.error||'Payment gateway failed','error');

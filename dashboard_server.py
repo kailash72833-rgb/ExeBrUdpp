@@ -207,7 +207,10 @@ class UserStore:
             try:
                 self.mongo = MongoClient(mongo_url, serverSelectionTimeoutMS=3000)
                 self.mongo.admin.command("ping")
-                database = self.mongo.get_default_database() or self.mongo["exe_level_up"]
+                try:
+                    database = self.mongo.get_default_database()
+                except Exception:
+                    database = self.mongo["exe_level_up"]
                 self.user_collection = database["users"]
                 self.token_collection = database["sessions"]
                 self.user_collection.create_index("username", unique=True)
@@ -226,12 +229,14 @@ class UserStore:
         _save_json(USERS_FILE, self.users)
         _save_json(USERS_FILE + ".tokens", self.tokens)
         if self.user_collection is not None:
-            self.user_collection.delete_many({})
-            if self.users:
-                self.user_collection.insert_many(list(self.users.values()))
-            self.token_collection.delete_many({})
-            if self.tokens:
-                self.token_collection.insert_many([dict(v, token=k) for k, v in self.tokens.items()])
+            for username, record in self.users.items():
+                self.user_collection.replace_one({"username": username}, record, upsert=True)
+            stored_usernames = set(self.users)
+            self.user_collection.delete_many({"username": {"$nin": list(stored_usernames)}} if stored_usernames else {})
+            for session_token, session in self.tokens.items():
+                self.token_collection.replace_one({"token": session_token}, dict(session, token=session_token), upsert=True)
+            stored_tokens = set(self.tokens)
+            self.token_collection.delete_many({"token": {"$nin": list(stored_tokens)}} if stored_tokens else {})
 
     def _cleanup_tokens(self):
         now = time.time()
@@ -521,13 +526,17 @@ async def handle_zapupi_order(request: web.Request):
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"}, 400)
         order_id = "EXE-" + secrets.token_hex(8).upper()
-        payload = {"zap_key": ZAPUPI_API_KEY, "order_id": order_id, "amount": str(plan["price_inr"])}
+        payload = {"zap_key": ZAPUPI_API_KEY, "api_key": ZAPUPI_API_KEY, "order_id": order_id, "amount": str(plan["price_inr"]), "name": "EXE LEVEL UP", "purpose": plan["name"]}
+        headers = {"Authorization": f"Bearer {ZAPUPI_API_KEY}", "X-API-Key": ZAPUPI_API_KEY, "Accept": "application/json"}
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(ZAPUPI_CREATE_ORDER_URL, json=payload) as response:
+            async with session.post(ZAPUPI_CREATE_ORDER_URL, json=payload, headers=headers) as response:
                 gateway_data = await response.json(content_type=None)
         if not isinstance(gateway_data, dict) or response.status >= 400:
             return _json({"status": "error", "error": "UPI gateway rejected the order"}, 502)
+        orders = _load_json(ORDERS_FILE, [])
+        orders.append({"id": order_id, "user_id": user["id"], "username": user["username"], "plan_id": plan["id"], "plan_name": plan["name"], "price_inr": plan["price_inr"], "payment_method": "ZapUPI", "status": "pending", "created_at": int(time.time()), "gateway": gateway_data})
+        _save_json(ORDERS_FILE, orders)
         return _json({"status": "ok", "order_id": order_id, "gateway": gateway_data})
     except Exception:
         return _json({"status": "error", "error": "Unable to create UPI order"}, 502)
