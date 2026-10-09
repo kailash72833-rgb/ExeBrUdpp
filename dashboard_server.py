@@ -52,8 +52,10 @@ DEFAULT_PLANS = [
 ]
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", ADMIN_PASSWORD_DEFAULT)
-ZAPUPI_API_KEY = os.environ.get("ZAPUPI_API_KEY", "")
+# Keep the payment key server-only. Railway currently provides it as `Key`.
+ZAPUPI_API_KEY = (os.environ.get("Key") or os.environ.get("ZAPUPI_API_KEY", "")).strip()
 ZAPUPI_CREATE_ORDER_URL = os.environ.get("ZAPUPI_CREATE_ORDER_URL", "https://pay.zapupi.com/api/create-order")
+ZAPUPI_WEBHOOK_URL = os.environ.get("ZAPUPI_WEBHOOK_URL", "")
 
 
 # ==================== STORAGE ====================
@@ -510,6 +512,27 @@ async def handle_get_stats(request: web.Request):
 
 
 # ==================== PLANS HANDLERS ====================
+async def handle_zapupi_webhook(request: web.Request):
+    try:
+        data = await request.json()
+        order_id = str(data.get("order_id", "")).strip()
+        if not order_id:
+            return _json({"status": "ok"})
+        orders = _load_json(ORDERS_FILE, [])
+        for order in orders:
+            if order.get("id") == order_id:
+                order["gateway_status"] = data.get("status", "")
+                order["txn_id"] = data.get("txn_id", "")
+                order["utr"] = data.get("utr", "")
+                if str(data.get("status", "")).lower() == "success":
+                    order["status"] = "paid"
+                break
+        _save_json(ORDERS_FILE, orders)
+        return _json({"status": "ok"})
+    except Exception:
+        return _json({"status": "ok"})
+
+
 async def handle_plans_list(request: web.Request):
     return _json({"status": "ok", "plans": load_plans()})
 
@@ -526,8 +549,10 @@ async def handle_zapupi_order(request: web.Request):
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"}, 400)
         order_id = "EXE-" + secrets.token_hex(8).upper()
-        payload = {"zap_key": ZAPUPI_API_KEY, "api_key": ZAPUPI_API_KEY, "order_id": order_id, "amount": str(plan["price_inr"]), "name": "EXE LEVEL UP", "purpose": plan["name"]}
-        headers = {"Authorization": f"Bearer {ZAPUPI_API_KEY}", "X-API-Key": ZAPUPI_API_KEY, "Accept": "application/json"}
+        payload = {"zap_key": ZAPUPI_API_KEY, "order_id": order_id, "amount": str(plan["price_inr"]), "remark": f"{plan['name']} | {user['username']}"}
+        if ZAPUPI_WEBHOOK_URL:
+            payload["webhook_url"] = ZAPUPI_WEBHOOK_URL
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(ZAPUPI_CREATE_ORDER_URL, json=payload, headers=headers) as response:
@@ -1166,6 +1191,7 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     r.add_get("/api/plans", handle_plans_list)
     r.add_post("/api/plans/order", handle_plan_order)
     r.add_post("/api/payments/zapupi/order", handle_zapupi_order)
+    r.add_post("/api/payments/zapupi/webhook", handle_zapupi_webhook)
     r.add_get("/api/plans/my-orders", handle_my_orders)
 
     r.add_get("/api/free-plan/status", handle_free_plan_status)
