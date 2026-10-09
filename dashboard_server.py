@@ -577,17 +577,19 @@ async def handle_zapupi_order(request: web.Request):
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"}, 400)
         order_id = "EXE" + secrets.token_hex(8).upper()
+        app_url = "https://nxc-bot-production.up.railway.app"
         payload = {
             "zap_key": ZAPUPI_API_KEY,
             "order_id": order_id,
             "amount": float(plan["price_inr"]),
             "customer_mobile": str(data.get("customer_mobile", "")).strip(),
             "remark": f"{plan['name']} | {user['username']}",
-            "success_url": str(data.get("success_url", "")).strip(),
-            "failed_url": str(data.get("failed_url", "")).strip(),
+            "success_url": str(data.get("success_url") or f"{app_url}/#home").strip(),
+            "failed_url": str(data.get("failed_url") or f"{app_url}/#home").strip(),
+            "timeout_url": str(data.get("timeout_url") or f"{app_url}/#home").strip(),
         }
         payload = {k: v for k, v in payload.items() if v not in ("", None)}
-        webhook_url = ZAPUPI_WEBHOOK_URL or f"{request.scheme}://{request.host}/api/payments/zapupi/webhook"
+        webhook_url = ZAPUPI_WEBHOOK_URL or f"{app_url}/api/payments/zapupi/webhook"
         payload["webhook_url"] = webhook_url
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         timeout = aiohttp.ClientTimeout(total=12)
