@@ -7,7 +7,9 @@ Embedded Async Web Server (aiohttp)
 """
 
 import asyncio
+import aiohttp
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -17,6 +19,10 @@ import uuid
 import zipfile
 from typing import Dict, List, Any, Optional
 from aiohttp import web
+try:
+    from pymongo import MongoClient
+except ImportError:
+    MongoClient = None
 
 
 # ==================== CONFIG ====================
@@ -46,6 +52,8 @@ DEFAULT_PLANS = [
 ]
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", ADMIN_PASSWORD_DEFAULT)
+ZAPUPI_API_KEY = os.environ.get("ZAPUPI_API_KEY", "")
+ZAPUPI_CREATE_ORDER_URL = os.environ.get("ZAPUPI_CREATE_ORDER_URL", "https://pay.zapupi.com/api/create-order")
 
 
 # ==================== STORAGE ====================
@@ -70,7 +78,20 @@ def _save_json(path: str, data):
 
 
 def _hash_pw(pw: str) -> str:
-    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt, 310000)
+    return f"pbkdf2_sha256$310000${salt.hex()}${digest.hex()}"
+
+
+def _verify_pw(pw: str, encoded: str) -> bool:
+    try:
+        algorithm, rounds, salt_hex, digest_hex = encoded.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return hmac.compare_digest(encoded, hashlib.sha256(pw.encode("utf-8")).hexdigest())
+        candidate = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), bytes.fromhex(salt_hex), int(rounds))
+        return hmac.compare_digest(candidate.hex(), digest_hex)
+    except (TypeError, ValueError):
+        return False
 
 
 # ==================== BOT STATE ====================
@@ -178,13 +199,39 @@ bot_state = BotState()
 # ==================== USERS ====================
 class UserStore:
     def __init__(self):
+        self.mongo = None
+        self.user_collection = None
+        self.token_collection = None
+        mongo_url = os.environ.get("MONGODB_CONNECTION_STRING", "").strip()
+        if mongo_url and MongoClient:
+            try:
+                self.mongo = MongoClient(mongo_url, serverSelectionTimeoutMS=3000)
+                self.mongo.admin.command("ping")
+                database = self.mongo.get_default_database() or self.mongo["exe_level_up"]
+                self.user_collection = database["users"]
+                self.token_collection = database["sessions"]
+                self.user_collection.create_index("username", unique=True)
+                self.user_collection.create_index("email", unique=True, sparse=True)
+            except Exception as exc:
+                print(f"[STORAGE] Mongo unavailable, using local fallback: {exc}")
+                self.mongo = None
         self.users: Dict[str, Dict] = _load_json(USERS_FILE, {})
         self.tokens: Dict[str, Dict] = _load_json(USERS_FILE + ".tokens", {})
+        if self.user_collection is not None:
+            self.users = {u["username"]: u for u in self.user_collection.find({}, {"_id": 0})}
+            self.tokens = {s["token"]: s for s in self.token_collection.find({}, {"_id": 0})}
         self._cleanup_tokens()
 
     def _persist(self):
         _save_json(USERS_FILE, self.users)
         _save_json(USERS_FILE + ".tokens", self.tokens)
+        if self.user_collection is not None:
+            self.user_collection.delete_many({})
+            if self.users:
+                self.user_collection.insert_many(list(self.users.values()))
+            self.token_collection.delete_many({})
+            if self.tokens:
+                self.token_collection.insert_many([dict(v, token=k) for k, v in self.tokens.items()])
 
     def _cleanup_tokens(self):
         now = time.time()
@@ -194,18 +241,24 @@ class UserStore:
         if dead:
             self._persist()
 
-    def find(self, username: str) -> Optional[Dict]:
-        return self.users.get(username.lower())
+    def find(self, identity: str) -> Optional[Dict]:
+        value = identity.strip().lower()
+        user = self.users.get(value)
+        if user:
+            return user
+        return next((item for item in self.users.values() if item.get("email", "").lower() == value), None)
 
-    def create(self, username: str, password: str, display_name: str) -> Optional[Dict]:
+    def create(self, username: str, email: str, password: str, display_name: str) -> Optional[Dict]:
         u = username.strip().lower()
         if not u or len(u) < 3:
             return None
-        if u in self.users:
+        email = email.strip().lower()
+        if u in self.users or any(item.get("email", "").lower() == email for item in self.users.values()):
             return None
         user = {
             "id": str(uuid.uuid4()),
             "username": u,
+            "email": email,
             "display_name": display_name.strip() or u,
             "password_hash": _hash_pw(password),
             "role": "user",
@@ -224,7 +277,7 @@ class UserStore:
         u = self.find(username)
         if not u:
             return None
-        if u.get("password_hash") != _hash_pw(password):
+        if not _verify_pw(password, u.get("password_hash", "")):
             return None
         return u
 
@@ -327,6 +380,7 @@ def _public_user(u: Dict) -> Dict:
     return {
         "id": u["id"],
         "username": u["username"],
+        "email": u.get("email", ""),
         "display_name": u.get("display_name", u["username"]),
         "role": u.get("role", "user"),
         "plan": u.get("plan", "Free"),
@@ -341,15 +395,18 @@ async def handle_user_register(request: web.Request):
     try:
         data = await request.json()
         username = str(data.get("username", "")).strip().lower()
+        email = str(data.get("email", "")).strip().lower()
         password = str(data.get("password", ""))
         display_name = str(data.get("display_name", "")).strip()
-        if len(username) < 3:
-            return _json({"status": "error", "error": "Username must be at least 3 chars"})
-        if len(password) < 4:
-            return _json({"status": "error", "error": "Password must be at least 4 chars"})
-        if user_store.find(username):
-            return _json({"status": "error", "error": "Username already taken"})
-        user = user_store.create(username, password, display_name)
+        if len(username) < 3 or not username.replace("_", "").isalnum():
+            return _json({"status": "error", "error": "Username must be 3+ letters, numbers, or underscore"})
+        if not email.endswith("@gmail.com"):
+            return _json({"status": "error", "error": "Use a valid Gmail address"})
+        if len(password) < 8:
+            return _json({"status": "error", "error": "Password must be at least 8 chars"})
+        if user_store.find(username) or user_store.find(email):
+            return _json({"status": "error", "error": "Username or Gmail already registered"})
+        user = user_store.create(username, email, password, display_name)
         if not user:
             return _json({"status": "error", "error": "Could not create user"})
         token = user_store.issue_token(username)
@@ -362,13 +419,13 @@ async def handle_user_register(request: web.Request):
 async def handle_user_login(request: web.Request):
     try:
         data = await request.json()
-        username = str(data.get("username", "")).strip().lower()
+        identity = str(data.get("identity", data.get("username", ""))).strip().lower()
         password = str(data.get("password", ""))
-        user = user_store.verify(username, password)
+        user = user_store.verify(identity, password)
         if not user:
-            return _json({"status": "error", "error": "Invalid username or password"})
-        user_store.update(username, last_login=int(time.time()))
-        token = user_store.issue_token(username)
+            return _json({"status": "error", "error": "Invalid Gmail/username or password"})
+        user_store.update(user["username"], last_login=int(time.time()))
+        token = user_store.issue_token(user["username"])
         return _json({"status": "ok", "token": token, "user": _public_user(user)})
     except Exception as e:
         return _json({"status": "error", "error": str(e)})
@@ -450,6 +507,30 @@ async def handle_get_stats(request: web.Request):
 # ==================== PLANS HANDLERS ====================
 async def handle_plans_list(request: web.Request):
     return _json({"status": "ok", "plans": load_plans()})
+
+
+async def handle_zapupi_order(request: web.Request):
+    user = _get_user(request)
+    if not user:
+        return _json({"status": "error", "error": "Not authenticated"}, 401)
+    if not ZAPUPI_API_KEY:
+        return _json({"status": "error", "error": "UPI gateway is not configured"}, 503)
+    try:
+        data = await request.json()
+        plan = next((p for p in load_plans() if p.get("id") == str(data.get("plan_id", ""))), None)
+        if not plan:
+            return _json({"status": "error", "error": "Unknown plan"}, 400)
+        order_id = "EXE-" + secrets.token_hex(8).upper()
+        payload = {"zap_key": ZAPUPI_API_KEY, "order_id": order_id, "amount": str(plan["price_inr"])}
+        timeout = aiohttp.ClientTimeout(total=12)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(ZAPUPI_CREATE_ORDER_URL, json=payload) as response:
+                gateway_data = await response.json(content_type=None)
+        if not isinstance(gateway_data, dict) or response.status >= 400:
+            return _json({"status": "error", "error": "UPI gateway rejected the order"}, 502)
+        return _json({"status": "ok", "order_id": order_id, "gateway": gateway_data})
+    except Exception:
+        return _json({"status": "error", "error": "Unable to create UPI order"}, 502)
 
 
 async def handle_plan_order(request: web.Request):
@@ -705,12 +786,16 @@ async def handle_account_delete(request: web.Request):
         accounts = [a for a in accounts if not matches(a)]
         _write_accounts(accounts)
 
-        if uid and uid in bot_state.accounts:
-            if is_admin or bot_state.accounts[uid].get("owner_user_id") == user["id"]:
-                del bot_state.accounts[uid]
-        if uid and uid in bot_state.account_workers:
-            bot_state.account_workers[uid].cancel()
-            del bot_state.account_workers[uid]
+    if uid and uid in bot_state.accounts:
+        if is_admin or (user and bot_state.accounts[uid].get("owner_user_id") == user["id"]):
+            worker = bot_state.account_workers.pop(uid, None)
+            if worker:
+                worker.cancel()
+            bot_state._paused.pop(uid, None)
+            bot_state.account_credentials.pop(uid, None)
+            del bot_state.accounts[uid]
+            bot_state.recalc_totals()
+
 
         bot_state.log(f"Node {uid or token[:10]} removed", "warning", uid)
         return _json({"status": "ok"})
@@ -1072,6 +1157,7 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
 
     r.add_get("/api/plans", handle_plans_list)
     r.add_post("/api/plans/order", handle_plan_order)
+    r.add_post("/api/payments/zapupi/order", handle_zapupi_order)
     r.add_get("/api/plans/my-orders", handle_my_orders)
 
     r.add_get("/api/free-plan/status", handle_free_plan_status)

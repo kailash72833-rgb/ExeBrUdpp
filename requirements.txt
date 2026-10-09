@@ -5,3 +5,4 @@ protobuf-decoder
 protobuf
 requests
 aiohttp
+pymongo
