@@ -512,6 +512,30 @@ async def handle_get_stats(request: web.Request):
 
 
 # ==================== PLANS HANDLERS ====================
+def _activate_paid_order(order: Dict, gateway_data: Dict):
+    username = str(order.get("username", "")).strip()
+    plan_id = str(order.get("plan_id", "")).strip()
+    plan = next((p for p in load_plans() if str(p.get("id")) == plan_id), None)
+    if not username or not plan:
+        return False
+    user = user_store.find(username)
+    if not user:
+        return False
+    now = int(time.time())
+    current_expiry = int(user.get("plan_expires_at", 0) or 0)
+    start_at = max(now, current_expiry)
+    user_store.update(
+        username,
+        plan=plan["name"],
+        slots=int(plan["slots"]),
+        plan_expires_at=start_at + int(plan["duration_hours"]) * 3600,
+        last_payment_order_id=order.get("id"),
+        last_payment_txn_id=gateway_data.get("txn_id") or gateway_data.get("transaction_id") or "",
+    )
+    order["activated_at"] = now
+    return True
+
+
 async def handle_zapupi_webhook(request: web.Request):
     try:
         data = await request.json()
@@ -521,11 +545,15 @@ async def handle_zapupi_webhook(request: web.Request):
         orders = _load_json(ORDERS_FILE, [])
         for order in orders:
             if order.get("id") == order_id:
+                gateway_status = str(data.get("status", "")).strip().lower()
                 order["gateway_status"] = data.get("status", "")
-                order["txn_id"] = data.get("txn_id", "")
+                order["txn_id"] = data.get("txn_id") or data.get("transaction_id") or ""
                 order["utr"] = data.get("utr", "")
-                if str(data.get("status", "")).lower() == "success":
+                if gateway_status in {"success", "successful", "paid", "completed"}:
                     order["status"] = "paid"
+                    _activate_paid_order(order, data)
+                elif gateway_status in {"failed", "failure", "cancelled", "canceled", "expired"}:
+                    order["status"] = "failed"
                 break
         _save_json(ORDERS_FILE, orders)
         return _json({"status": "ok"})
@@ -559,8 +587,8 @@ async def handle_zapupi_order(request: web.Request):
             "failed_url": str(data.get("failed_url", "")).strip(),
         }
         payload = {k: v for k, v in payload.items() if v not in ("", None)}
-        if ZAPUPI_WEBHOOK_URL:
-            payload["webhook_url"] = ZAPUPI_WEBHOOK_URL
+        webhook_url = ZAPUPI_WEBHOOK_URL or f"{request.scheme}://{request.host}/api/payments/zapupi/webhook"
+        payload["webhook_url"] = webhook_url
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
