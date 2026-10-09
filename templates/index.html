@@ -321,7 +321,7 @@ select.fin option{background:#141414;color:#fff;padding:10px}
   #app .plan .dur,#app .plan .price .alt,#app .plan .feats li,#app .contact p,#app .mhead p,#app .footer,#app .cred-lbl,#app .console-title,#app .updated{color:#536784 !important}
   #app .plan .feats li i{color:#2563eb !important}#app .plan-icon{background:#102a56 !important;color:#fff !important}#app .btn-buy,#app .btn-primary,#app .btn-submit{color:#fff !important}#app .btn-buy:hover{background:#1d4ed8 !important;color:#fff !important}
   #pg-buy h2,#pg-buy h3,#pg-contact h2,#pg-contact h3{color:#14213d !important}#pg-buy p,#pg-buy .plan p,#pg-contact p{color:#536784 !important}#pg-buy .plan h3{color:#14213d !important}#pg-buy .plan .price .main{color:#14213d !important}#pg-buy .plan .price .alt{color:#536784 !important}#pg-buy .plan .feats li{color:#536784 !important}#pg-buy .plan .feats li i{color:#2563eb !important}
-  #app .mbox{background:#fff !important;color:#14213d !important}#app .fin{background:#fff !important;border-color:#bfd0ea !important}#app select.fin option{background:#fff;color:#14213d}
+  #app .mbox,#checkoutModal .mbox{background:#fff !important;color:#14213d !important}#checkoutModal .checkout-plan-card{background:#eef5ff !important;border:1px solid #b8cff0;border-radius:12px;padding:14px;margin-bottom:12px;color:#14213d !important}.checkout-plan-row{display:flex;justify-content:space-between;align-items:center}.checkout-plan-row span:first-child{font-weight:800;font-size:16px;color:#123d80 !important}.checkout-plan-row span:last-child{font:800 18px var(--font-m);color:#14213d !important}.checkout-plan-card #coDetails{font-size:12px;color:#536784 !important;margin-top:5px}.checkoutModal .mhead h3,#checkoutModal .mhead h3{color:#14213d !important}.checkoutModal .mclose,#checkoutModal .mclose{color:#536784 !important}.checkoutModal .tab-btn,#checkoutModal .tab-btn{color:#16458f !important;background:#fff !important}.checkoutModal .gateway-card,#checkoutModal .gateway-card{background:#e8f2ff !important;color:#16458f !important}.checkoutModal .gateway-card b,#checkoutModal .gateway-card b{color:#16458f !important}.checkoutModal .gateway-card span,#checkoutModal .gateway-card span{color:#536784 !important}.checkoutModal .flbl,#checkoutModal .flbl{color:#14213d !important}.checkoutModal .fin,#checkoutModal .fin{background:#fff !important;color:#14213d !important;border-color:#bfd0ea !important}#app .fin{background:#fff !important;border-color:#bfd0ea !important}#app select.fin option{background:#fff;color:#14213d}
   </style>
 </head>
 <body>
@@ -582,13 +582,13 @@ select.fin option{background:#141414;color:#fff;padding:10px}
 <div class="modal" id="checkoutModal">
   <div class="mbox">
     <div class="mhead"><h3>Checkout Plan</h3><button class="mclose" onclick="closeM('checkoutModal')"><i class="fa-solid fa-xmark"></i></button></div>
-    <div style="background:#1a1a1a;border:1px solid var(--border-h);border-radius:8px;padding:11px;margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-weight:700;font-size:14px;" id="coName">Plan</span>
-        <span style="font-family:var(--font-m);font-size:17px;font-weight:800;color:#f5f5f5;" id="coPrice">₹0</span>
-      </div>
-      <div style="font-size:11px;color:var(--text-3);margin-top:3px;" id="coDetails"></div>
-    </div>
+  <div class="checkout-plan-card">
+  <div class="checkout-plan-row">
+  <span id="coName">Plan</span>
+  <span id="coPrice">₹0</span>
+  </div>
+  <div id="coDetails"></div>
+  </div>
     <div class="tabs">
       <button type="button" class="tab-btn active" id="co-inr" onclick="setCoMethod('INR')"><i class="fa-solid fa-indian-rupee-sign"></i> UPI</button>
     </div>
