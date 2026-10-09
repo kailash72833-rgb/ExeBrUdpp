@@ -548,7 +548,7 @@ async def handle_zapupi_order(request: web.Request):
         plan = next((p for p in load_plans() if p.get("id") == str(data.get("plan_id", ""))), None)
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"}, 400)
-        order_id = "EXE-" + secrets.token_hex(8).upper()
+        order_id = "EXE" + secrets.token_hex(8).upper()
         payload = {
             "zap_key": ZAPUPI_API_KEY,
             "order_id": order_id,
