@@ -204,7 +204,7 @@ class UserStore:
         self.mongo = None
         self.user_collection = None
         self.token_collection = None
-        mongo_url = os.environ.get("MONGODB_CONNECTION_STRING", "").strip()
+        mongo_url = (os.environ.get("MONGODB_CONNECTION_STRING_2") or os.environ.get("MONGODB_CONNECTION_STRING", "")).strip()
         if mongo_url and MongoClient:
             try:
                 self.mongo = MongoClient(mongo_url, serverSelectionTimeoutMS=3000)

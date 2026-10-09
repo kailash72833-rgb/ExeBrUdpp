@@ -320,7 +320,7 @@ select.fin option{background:#141414;color:#fff;padding:10px}
   #app .plan h3,#app .plan .price .main,#app .plan .dur,#app .plan .price .alt,#app .plan .feats li,#app .plan .feats li i,#app .contact,#app .contact p,#app .footer,#app .footer b,#app .mhead h3,#app .mhead p,#app .mclose,#app .fin,#app .cred-val,#app .cred-btn,#app .console,#app .console *{color:#14213d !important}
   #app .plan .dur,#app .plan .price .alt,#app .plan .feats li,#app .contact p,#app .mhead p,#app .footer,#app .cred-lbl,#app .console-title,#app .updated{color:#536784 !important}
   #app .plan .feats li i{color:#2563eb !important}#app .plan-icon{background:#102a56 !important;color:#fff !important}#app .btn-buy,#app .btn-primary,#app .btn-submit{color:#fff !important}#app .btn-buy:hover{background:#1d4ed8 !important;color:#fff !important}
-  #pg-buy>div:first-child h2,#pg-contact>div:first-child h2{color:#14213d !important}#pg-buy>div:first-child p,#pg-contact>div:first-child p{color:#536784 !important}
+  #pg-buy h2,#pg-buy h3,#pg-contact h2,#pg-contact h3{color:#14213d !important}#pg-buy p,#pg-buy .plan p,#pg-contact p{color:#536784 !important}#pg-buy .plan h3{color:#14213d !important}#pg-buy .plan .price .main{color:#14213d !important}#pg-buy .plan .price .alt{color:#536784 !important}#pg-buy .plan .feats li{color:#536784 !important}#pg-buy .plan .feats li i{color:#2563eb !important}
   #app .mbox{background:#fff !important;color:#14213d !important}#app .fin{background:#fff !important;border-color:#bfd0ea !important}#app select.fin option{background:#fff;color:#14213d}
   </style>
 </head>
@@ -1028,22 +1028,17 @@ window.buyPlan = (id)=>{
   openM('checkoutModal');
 };
 
-window.setCoMethod = (m)=>{
-  coMethod = m;
-  const usd = m==='USD';
-  $('co-inr').classList.toggle('active', !usd);
-  $('co-usd').classList.toggle('active', usd);
-  $('coUPI').style.display = usd ? 'none':'block';
-  $('coBIN').style.display = usd ? 'block':'none';
-  if(!usd){
-    const upi = `upi://pay?pa=${encodeURIComponent(BOT.upi_id)}&pn=${encodeURIComponent(BOT.upi_name)}&cu=INR`;
-    $('coQR').src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=8&data=${encodeURIComponent(upi)}`;
-  }
-  if(coPlan){
-    $('coPrice').innerText = usd ? `$${coPlan.price_usd}` : `₹${coPlan.price_inr}`;
-    $('coBINAmt').innerText = `$${coPlan.price_usd} USDT`;
-  }
-};
+  window.setCoMethod = ()=>{
+    coMethod = 'INR';
+    const inrTab = $('co-inr');
+    if(inrTab) inrTab.classList.add('active');
+    const upiBox = $('coUPI');
+    if(upiBox) upiBox.style.display = 'block';
+    if(coPlan){
+      const price = $('coPrice');
+      if(price) price.innerText = `₹${coPlan.price_inr}`;
+    }
+  };
 
 window.submitOrder = async(e)=>{
   e.preventDefault();
@@ -1054,8 +1049,8 @@ window.submitOrder = async(e)=>{
   if(d.status==='ok'){
     const gateway=d.gateway||{};
     const checkoutUrl=gateway.payment_url||gateway.paymentUrl||gateway.checkout_url||gateway.checkoutUrl||gateway.payment_link||gateway.redirect_url||gateway.redirect||gateway.url||gateway.data?.payment_url||gateway.data?.paymentUrl||gateway.data?.checkout_url||gateway.data?.url||gateway.result?.payment_url||gateway.result?.url;
-    if(checkoutUrl){ window.location.href=checkoutUrl; }
-    else toast('Gateway order created. Payment link was not returned.','warning');
+    if(checkoutUrl){ window.location.assign(checkoutUrl); }
+    else toast('ZapUPI order response missing payment URL. Please retry.','error');
   } else toast(d.error||'Payment gateway failed','error');
   }catch(e){ toast(e.message,'error'); }
 };
