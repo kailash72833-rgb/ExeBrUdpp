@@ -12,8 +12,8 @@
 <style>
 :root{
   --bg:#0a0a0a;--card:#141414;--card-2:#1a1a1a;
-  --border:#2a2a2a;--border-h:#4a4a4a;
-  --text:#fff;--text-2:#a1a1aa;--text-3:#71717a;
+  --border:#454545;--border-h:#737373;
+  --text:#fff;--text-2:#d4d4d8;--text-3:#a1a1aa;
   --btn:#e5e5e5;--btn-txt:#0a0a0a;
   --accent:#7c5cff;--accent-2:#5b9dff;
   --amber:#f59e0b;--red:#ef4444;
@@ -239,7 +239,10 @@ header.top{display:flex;align-items:center;gap:12px;padding:10px 16px;background
 .cred-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .cred-row:last-child{border-bottom:0}
 .cred-lbl{font-size:10px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:.4px;min-width:75px}
-.cred-val{font-family:var(--font-m);font-size:12px;font-weight:600;flex:1;word-break:break-all;min-width:0}
+  .cred-val{color:#f5f5f5 !important;}
+  .cred-lbl{color:#d4d4d8 !important;}
+  .tag,.act,.asub-btn{color:#f5f5f5;}
+  .cred-val{font-family:var(--font-m);font-size:12px;font-weight:600;flex:1;word-break:break-all;min-width:0}
 .cred-val.pass{color:#fbbf24}
 .cred-btn{background:#1f1f1f;border:1px solid var(--border-h);color:#e5e5e5;font-size:10.5px;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:inherit;transition:background .15s,color .15s}
 .cred-btn:hover{background:var(--btn);color:var(--btn-txt);border-color:transparent}
@@ -675,7 +678,8 @@ function setLoader(show, text){ const el=$('loader'); if(text) $('loader-text').
 function toast(msg, type='info'){ const c=$('toasts'); const t=document.createElement('div'); t.className='toast '+type; const ic=type==='success'?'fa-circle-check':type==='error'?'fa-triangle-exclamation':type==='warning'?'fa-bell':'fa-circle-info'; t.innerHTML=`<i class="fa-solid ${ic}"></i><span>${esc(msg)}</span>`; c.appendChild(t); setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; setTimeout(()=>t.remove(),300); },3200); }
 function closeM(id){ $(id).classList.remove('on'); }
 function openM(id){ $(id).classList.add('on'); }
-function copyTo(txt){ navigator.clipboard.writeText(txt).then(()=>toast('Copied','success')).catch(()=>prompt('Copy:',txt)); }
+  function copyTo(txt){ navigator.clipboard.writeText(txt).then(()=>toast('Copied','success')).catch(()=>prompt('Copy:',txt)); }
+  function toggleSecret(id, btn){ const el=$(id); if(!el) return; const hidden=el.dataset.hidden==='1'; if(hidden){ el.textContent=el.dataset.value||''; el.dataset.hidden='0'; btn.innerHTML='<i class="fa-solid fa-eye-slash"></i>'; } else { el.dataset.value=el.textContent; el.textContent='••••••••••••'; el.dataset.hidden='1'; btn.innerHTML='<i class="fa-solid fa-eye"></i>'; } }
 function isAdmin(){ if(!adminToken) return false; if(adminExp && Date.now()/1000 > adminExp){ adminToken=''; adminExp=0; localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp'); return false; } return true; }
 
 async function api(path, opts={}){
@@ -920,7 +924,7 @@ function renderAccounts(accs){
 window.togglePause = async(uid)=>{ try{ const {d}=await api('/api/account/pause',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast(d.message||'Toggled','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
   window.refreshAcc = async(uid)=>{ try{ toast('Refreshing...','info'); await api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid})}); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },800); }catch(e){ toast(e.message,'error'); } };
   window.refreshAllAccounts = async(btn)=>{ try{ if(btn){btn.disabled=true;btn.classList.add('spin');} toast('Refreshing all account details...','info'); const {d}=await api('/api/account/refresh-all',{method:'POST',body:JSON.stringify({})}); if(d.status==='ok'){ lastAccountsSig=''; await fetchStats(); toast(`Refreshed ${d.refreshed||0} account(s)`,'success'); } else toast(d.error||'Refresh failed','error'); }catch(e){ toast(e.message,'error'); }finally{ if(btn){btn.disabled=false;btn.classList.remove('spin');} } };
-  window.refreshAllAccounts = async(btn)=>{ const icon=btn?.querySelector('i'); if(icon) icon.classList.add('fa-spin'); try{ const accounts=(botData?.accounts||[]); await Promise.all(accounts.map(a=>api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid:a.uid})}))); lastAccountsSig=''; await fetchStats(); toast('All account details refreshed','success'); }catch(e){ toast(e.message,'error'); } finally{ if(icon) icon.classList.remove('fa-spin'); } };
+
 window.restartAcc = async(uid)=>{ if(!confirm('Restart bot for '+uid+'?')) return; try{ const {d}=await api('/api/account/restart',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Restarting...','success'); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },1200); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
 window.deleteAcc = async(uid)=>{ if(!confirm('Delete '+uid+'?')) return; try{ const {d}=await api('/api/account/delete',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Deleted','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
 
@@ -1175,7 +1179,7 @@ window.loadAdminSec = async(sec,btn)=>{
       const {d} = await api('/api/admin/credentials');
       const creds = d.credentials||[];
       if(!creds.length){ c.innerHTML='<div class="empty"><h3>No Credentials</h3></div>'; return; }
-      c.innerHTML = creds.map((cr,i)=>`<div class="cred"><div class="cred-head"><h4><i class="fa-solid fa-user" style="color:#d4d4d4;"></i> ${esc(cr.nickname||'Unknown')}</h4><span class="tag" style="font-size:10px;">${esc(cr.status||'?')} • Lv.${cr.level||0}</span></div><div class="cred-row"><span class="cred-lbl">UID</span><span class="cred-val">${esc(cr.uid)}</span><button class="cred-btn" onclick="copyTo('${esc(cr.uid)}')"><i class="fa-solid fa-copy"></i></button></div>${cr.password?`<div class="cred-row"><span class="cred-lbl">Password</span><span class="cred-val pass" id="cp-${i}">${esc(cr.password)}</span><button class="cred-btn" onclick="copyTo(document.getElementById('cp-${i}').textContent)"><i class="fa-solid fa-copy"></i></button></div>`:''}${cr.has_token?`<div class="cred-row"><span class="cred-lbl">Token</span><span class="cred-val" style="color:#fbbf24;">${esc(cr.token||'')}</span></div>`:''}<div class="cred-row"><span class="cred-lbl">Owner</span><span class="cred-val" style="font-family:var(--font-b);">${esc(cr.owner_username||'?')}</span></div><div class="cred-row"><span class="cred-lbl">Gained</span><span class="cred-val" style="color:#f5f5f5;">+${fmt(cr.gained_exp||0)}</span></div></div>`).join('');
+      c.innerHTML = creds.map((cr,i)=>`<div class="cred"><div class="cred-head"><h4><i class="fa-solid fa-user" style="color:#d4d4d4;"></i> ${esc(cr.nickname||'Unknown')}</h4><span class="tag" style="font-size:10px;">${esc(cr.status||'?')} • Lv.${cr.level||0}</span></div><div class="cred-row"><span class="cred-lbl">UID</span><span class="cred-val">${esc(cr.uid)}</span><button class="cred-btn" onclick="copyTo('${esc(cr.uid)}')"><i class="fa-solid fa-copy"></i></button></div>${cr.password?`<div class="cred-row"><span class="cred-lbl">Password</span><span class="cred-val pass secret" id="cp-${i}">${esc(cr.password)}</span><button class="cred-btn" onclick="toggleSecret('cp-${i}',this)"><i class="fa-solid fa-eye"></i></button></div>`:''}${cr.has_token?`<div class="cred-row"><span class="cred-lbl">Access token</span><span class="cred-val secret" id="ct-${i}">${esc(cr.token||'')}</span><button class="cred-btn" onclick="toggleSecret('ct-${i}',this)"><i class="fa-solid fa-eye"></i></button></div>`:''}<div class="cred-row"><span class="cred-lbl">Owner</span><span class="cred-val" style="font-family:var(--font-b);">${esc(cr.owner_username||'?')}</span></div><div class="cred-row"><span class="cred-lbl">Level / EXP</span><span class="cred-val" style="color:#f5f5f5;">Lv.${cr.level||0} • ${fmt(cr.current_exp||0)} • Gained +${fmt(cr.gained_exp||0)}</span></div><div class="cred-row"><span class="cred-lbl">Updated</span><span class="cred-val" style="font-family:var(--font-b);">${cr.last_updated_at ? new Date(cr.last_updated_at*1000).toLocaleString() : '—'}</span></div></div>`).join('');
     } else if(sec==='accounts'){
       const {d} = await api('/api/admin/accounts');
       const accs = d.accounts||[];

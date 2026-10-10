@@ -883,7 +883,9 @@ async def handle_account_delete(request: web.Request):
                 if workers_to_cancel:
                     await asyncio.gather(*workers_to_cancel, return_exceptions=True)
                 bot_state._paused.pop(uid, None)
-                bot_state.account_credentials.pop(uid, None)
+                for key, credential in list(bot_state.account_credentials.items()):
+                    if key == uid or str(credential.get("account_id", "")) == uid or str(credential.get("auth_uid", "")) == uid:
+                        bot_state.account_credentials.pop(key, None)
                 del bot_state.accounts[uid]
                 bot_state.recalc_totals()
 
@@ -1132,22 +1134,27 @@ async def handle_admin_credentials(request: web.Request):
         return _json({"status": "error", "error": "Admin only"}, 403)
     accounts = _read_accounts()
     out = []
+    live_uids = set(bot_state.accounts)
     for a in accounts:
         uid = str(a.get("uid", "")).strip()
-        token = a.get("token", "")
-        password = a.get("password", "")
-        owner_username = a.get("owner_username", "")
+        token = str(a.get("token", ""))
         live = bot_state.accounts.get(uid, {})
+        resolved_uid = uid or str(live.get("uid", ""))
+        if resolved_uid not in live_uids:
+            continue
+        credential = dict(bot_state.account_credentials.get(resolved_uid, {}))
         out.append({
-            "uid": uid or (live.get("uid", "") if live else ""),
-            "nickname": live.get("nickname", ""),
-            "password": password,
-            "token": token,
-            "has_token": bool(token),
-            "owner_username": owner_username,
+            "uid": resolved_uid,
+            "nickname": live.get("nickname", credential.get("nickname", "")),
+            "password": a.get("password", ""),
+            "token": token or credential.get("access_token", "") or credential.get("token", ""),
+            "has_token": bool(token or credential.get("access_token") or credential.get("token")),
+            "owner_username": a.get("owner_username", live.get("owner_username", "")),
             "status": live.get("status", "OFFLINE"),
             "level": live.get("level", 0),
+            "current_exp": live.get("current_exp", 0),
             "gained_exp": live.get("gained_exp", 0),
+            "last_updated_at": live.get("last_updated_at", 0),
         })
     return _json({"status": "ok", "credentials": out})
 
