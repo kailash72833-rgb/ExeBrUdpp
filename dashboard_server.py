@@ -157,6 +157,7 @@ class BotState:
                 "last_match_time": None,
                 "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "last_updated_at": int(time.time()),
+                "added_at": int(time.time()),
                 "owner_user_id": owner_user_id,
                 "owner_username": owner_username,
             }
@@ -1354,6 +1355,29 @@ async def handle_index(request: web.Request):
     return web.Response(text=content, content_type="text/html", charset="utf-8")
 
 
+APP_DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "app")
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+async def handle_react_app(request: web.Request):
+    index_path = os.path.join(APP_DIST_DIR, "index.html")
+    if not os.path.exists(index_path):
+        return web.Response(text="<h1>React app not built (static/app missing)</h1>", content_type="text/html", status=404)
+    with open(index_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return web.Response(text=content, content_type="text/html", charset="utf-8",
+                        headers={**SECURITY_HEADERS, "Cache-Control": "no-cache"})
+
+
+async def handle_react_redirect(request: web.Request):
+    raise web.HTTPFound("/app/")
+
+
 # ==================== START ====================
 async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     if port is None:
@@ -1363,6 +1387,10 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     r = app.router
 
     r.add_get("/", handle_index)
+    r.add_get("/app", handle_react_redirect)
+    r.add_get("/app/", handle_react_app)
+    if os.path.isdir(os.path.join(APP_DIST_DIR, "assets")):
+        r.add_static("/app/assets", os.path.join(APP_DIST_DIR, "assets"))
 
     r.add_post("/api/user/register", handle_user_register)
     r.add_post("/api/user/login", handle_user_login)
