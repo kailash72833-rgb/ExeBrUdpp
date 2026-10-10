@@ -1519,6 +1519,8 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
             writer = None
             gateway_ping_task = None
             try:
+                if bot_state.is_deleted(uid_str):
+                    raise asyncio.CancelledError()
                 if current_account_data:
                     fresh = None
                     if current_account_data.get('auth_type') == 'guest' and current_account_data.get('auth_uid'):
@@ -1623,6 +1625,9 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                 await send_start_match()
 
                 while True:
+                    if bot_state.is_deleted(uid_str):
+                        print_warning(f"[DELETE] UID {uid_str} deleted -> stopping functional loop")
+                        raise asyncio.CancelledError()
                     play_matches[:] = [m for m in play_matches if not m.done()]
                     active_count = await _get_match_count(uid_str)
                     try:
@@ -2201,6 +2206,8 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
                 print_warning(f"[EXP-REFRESH] initial refresh error ({acc_id}): {e}")
             while True:
                 await asyncio.sleep(EXP_REFRESH_INTERVAL)
+                if bot_state.is_deleted(acc_id):
+                    return
                 try:
                     fresh = bot_state.account_credentials.get(acc_id)
                     if fresh:
@@ -2239,6 +2246,9 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
 async def account_loop_guest(uid: str, password: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
     while True:
+        if bot_state.is_deleted(uid):
+            print_warning(f"[DELETE] Guest UID {uid} deleted -> worker exit")
+            break
         try:
             print_info(f"[LOGIN] Starting login for Guest UID: {uid} (mode: {mode})...")
             try:
@@ -2249,6 +2259,9 @@ async def account_loop_guest(uid: str, password: str, mode: str = "auto",
                 uid, password, owner_user_id=owner_user_id,
                 owner_username=owner_username, mode=mode
             )
+            if bot_state.is_deleted(uid, (account_data or {}).get('account_id')):
+                print_warning(f"[DELETE] Guest UID {uid} deleted during login -> worker exit")
+                break
             if not account_data:
                 print_error(f"Login failed for UID: {uid}. Retrying in 15 seconds...")
                 try:
@@ -2276,12 +2289,18 @@ async def account_loop_token(token: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
     token_label = token[:10]
     while True:
+        if bot_state.is_deleted(token, token_label):
+            print_warning(f"[DELETE] Token {token_label} deleted -> worker exit")
+            break
         try:
             print_info(f"[LOGIN] Starting login with Access Token (mode: {mode})...")
             account_data = await process_account_token(
                 token, owner_user_id=owner_user_id,
                 owner_username=owner_username, mode=mode
             )
+            if bot_state.is_deleted(token, token_label, (account_data or {}).get('account_id')):
+                print_warning(f"[DELETE] Token {token_label} deleted during login -> worker exit")
+                break
             if not account_data:
                 print_error("Login failed for Token. Retrying in 15 seconds...")
                 await asyncio.sleep(15)
@@ -2342,24 +2361,51 @@ async def main():
             mode = "auto"
         owner_id = str(data.get("owner_user_id", "") or "")
         owner_name = str(data.get("owner_username", "") or "")
+
+        async def _replace_worker(key, coro):
+            old = bot_state.account_workers.pop(key, None)
+            if old and not old.done():
+                old.cancel()
+                await asyncio.wait([old], timeout=10)
+            bot_state.account_workers[key] = asyncio.create_task(coro)
+
         if "token" in data and data["token"]:
             t = str(data["token"]).strip()
-            task = asyncio.create_task(account_loop_token(
+            await _replace_worker(t[:10], account_loop_token(
                 t, mode=mode, owner_user_id=owner_id, owner_username=owner_name
             ))
-            bot_state.account_workers[t[:10]] = task
         elif "uid" in data and "password" in data:
             u = str(data["uid"]).strip()
             p = str(data["password"]).strip()
-            task = asyncio.create_task(account_loop_guest(
+            await _replace_worker(u, account_loop_guest(
                 u, p, mode=mode, owner_user_id=owner_id, owner_username=owner_name
             ))
-            bot_state.account_workers[u] = task
 
     async def on_refresh_account_handler(uid):
         await refresh_account_profile(uid)
 
+    async def on_account_deleted_handler(ids):
+        ids = {str(i) for i in ids}
+        for key in list(_load_token_cache().keys()):
+            if key in ids:
+                cache_invalidate(key)
+        if os.path.exists(DEVICES_FILE):
+            try:
+                with open(DEVICES_FILE, "r", encoding="utf-8") as f:
+                    devices = json.load(f)
+                remaining = {k: v for k, v in devices.items() if k not in ids}
+                if len(remaining) != len(devices):
+                    with open(DEVICES_FILE, "w", encoding="utf-8") as f:
+                        json.dump(remaining, f, indent=4)
+            except Exception as e:
+                print_error(f"[DELETE] devices cleanup failed: {e}")
+        async with _match_counter_lock:
+            for i in ids:
+                _match_counters.pop(i, None)
+        print_success(f"[DELETE] Account fully wiped: {', '.join(sorted(i for i in ids if not i.startswith('tok_')))[:120]}")
+
     bot_state.refresh_callbacks["on_account_added"] = on_account_added_handler
+    bot_state.refresh_callbacks["on_account_deleted"] = on_account_deleted_handler
     bot_state.refresh_callbacks["on_refresh_account"] = on_refresh_account_handler
 
     accounts = load_accounts()

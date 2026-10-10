@@ -109,6 +109,24 @@ class BotState:
         self.refresh_callbacks: Dict[str, Any] = {}
         self.account_credentials: Dict[str, Dict[str, Any]] = {}
         self._paused: Dict[str, bool] = {}
+        # Each deleted account is stored as a group of every identifier it was known by
+        # (game account id, guest login uid, access token, token prefixes) so that any
+        # in-flight login or worker loop can detect the deletion and stop for good.
+        self._deleted_groups: List[set] = []
+
+    def is_deleted(self, *identifiers) -> bool:
+        ids = {str(i) for i in identifiers if i not in (None, "")}
+        return any(ids & group for group in self._deleted_groups)
+
+    def mark_deleted(self, identifiers: set):
+        ids = {str(i) for i in identifiers if i not in (None, "")}
+        if ids:
+            self._deleted_groups.append(ids)
+
+    def undelete(self, *identifiers):
+        ids = {str(i) for i in identifiers if i not in (None, "")}
+        if ids:
+            self._deleted_groups = [g for g in self._deleted_groups if not (ids & g)]
 
     def log(self, message: str, level: str = "info", uid: Optional[str] = None):
         entry = {"time": time.strftime("%H:%M:%S"), "level": level, "message": message, "uid": uid}
@@ -120,6 +138,8 @@ class BotState:
                          exp: int, likes: int = 0, mode: str = "auto",
                          owner_user_id: str = "", owner_username: str = ""):
         uid_str = str(uid)
+        if self.is_deleted(uid_str):
+            return
         if uid_str not in self.accounts:
             self.accounts[uid_str] = {
                 "uid": uid_str,
@@ -738,6 +758,100 @@ def _write_accounts(accounts: List[Dict]):
     _save_json(ACCOUNTS_FILE, accounts)
 
 
+def _token_ids(token: str) -> set:
+    token = str(token or "").strip()
+    if not token:
+        return set()
+    return {token, token[:10], f"tok_{token[:20]}"}
+
+
+def _credential_ids(key: str, cred: Dict) -> set:
+    ids = {str(key), str(cred.get("account_id", "") or ""), str(cred.get("auth_uid", "") or "")}
+    ids |= _token_ids(cred.get("auth_token", ""))
+    ids.discard("")
+    return ids
+
+
+def _entry_ids(entry: Dict) -> set:
+    ids = _token_ids(entry.get("token", ""))
+    entry_uid = str(entry.get("uid", "") or "").strip()
+    if entry_uid:
+        ids.add(entry_uid)
+    return ids
+
+
+def _collect_identities(uid: str = "", token: str = "", file_accounts: Optional[List[Dict]] = None) -> set:
+    """Expand a game account id / guest uid / token into every identifier the bot uses for it."""
+    ids = set()
+    if uid:
+        ids.add(str(uid).strip())
+    ids |= _token_ids(token)
+    ids.discard("")
+    if not ids:
+        return ids
+    entries = file_accounts if file_accounts is not None else _read_accounts()
+    while True:
+        size = len(ids)
+        for key, cred in list(bot_state.account_credentials.items()):
+            cand = _credential_ids(key, cred)
+            if cand & ids:
+                ids |= cand
+        for entry in entries:
+            cand = _entry_ids(entry)
+            if cand & ids:
+                ids |= cand
+        if len(ids) == size:
+            return ids
+
+
+def _user_owns_any(user: Optional[Dict], ids: set) -> bool:
+    if not user:
+        return False
+    for i in ids:
+        live = bot_state.accounts.get(i)
+        if live and live.get("owner_user_id") == user["id"]:
+            return True
+    for entry in _read_accounts():
+        if _entry_ids(entry) & ids and entry.get("owner_user_id") == user["id"]:
+            return True
+    return False
+
+
+async def _purge_account(ids: set):
+    """Stop every task for the account and erase all of its stored traces."""
+    if not ids:
+        return
+    bot_state.mark_deleted(ids)
+
+    _write_accounts([a for a in _read_accounts() if not (_entry_ids(a) & ids)])
+
+    workers = []
+    for key, worker in list(bot_state.account_workers.items()):
+        if key in ids:
+            bot_state.account_workers.pop(key, None)
+            if worker and not worker.done():
+                worker.cancel()
+                workers.append(worker)
+    if workers:
+        await asyncio.wait(workers, timeout=10)
+
+    for key, cred in list(bot_state.account_credentials.items()):
+        if _credential_ids(key, cred) & ids:
+            bot_state.account_credentials.pop(key, None)
+    for i in ids:
+        bot_state.accounts.pop(i, None)
+        bot_state._paused.pop(i, None)
+    bot_state.logs = [l for l in bot_state.logs if l.get("uid") not in ids]
+    bot_state.recalc_totals()
+
+    callback = bot_state.refresh_callbacks.get("on_account_deleted")
+    if callback:
+        try:
+            await callback(ids)
+        except Exception as e:
+            print(f"[DELETE] cleanup callback failed: {e}")
+
+
 async def handle_account_add(request: web.Request):
     user = _get_user(request)
     is_admin = _get_admin(request)
@@ -763,6 +877,7 @@ async def handle_account_add(request: web.Request):
             pwd = str(data["password"]).strip()
             if not uid or not pwd:
                 return _json({"status": "error", "error": "UID and Password required"})
+            bot_state.undelete(uid)
             accounts = [a for a in accounts if str(a.get("uid")) != uid]
             accounts.append({"uid": uid, "password": pwd, "mode": mode,
                              "owner_user_id": owner_id, "owner_username": owner_name})
@@ -770,6 +885,7 @@ async def handle_account_add(request: web.Request):
             tok = str(data["token"]).strip()
             if not tok:
                 return _json({"status": "error", "error": "Token required"})
+            bot_state.undelete(*_token_ids(tok))
             accounts = [a for a in accounts if a.get("token") != tok]
             accounts.append({"token": tok, "mode": mode,
                              "owner_user_id": owner_id, "owner_username": owner_name})
@@ -815,6 +931,7 @@ async def handle_account_bulk_add(request: web.Request):
             if not uid or not pwd:
                 failed += 1
                 continue
+            bot_state.undelete(uid)
             accounts = [a for a in accounts if str(a.get("uid")) != uid]
             accounts.append({"uid": uid, "password": pwd, "mode": mode,
                              "owner_user_id": owner_id, "owner_username": owner_name})
@@ -846,50 +963,12 @@ async def handle_account_delete(request: web.Request):
         if not uid and not token:
             return _json({"status": "error", "error": "uid or token required"})
 
-        accounts = _read_accounts()
+        ids = _collect_identities(uid, token)
+        if not is_admin and not _user_owns_any(user, ids):
+            return _json({"status": "error", "error": "Not your account"}, 403)
 
-        def owned(a):
-            if is_admin:
-                return True
-            return a.get("owner_user_id") == user["id"]
-
-        def matches(a):
-            if uid and str(a.get("uid", "")) == uid and owned(a):
-                return True
-            if token and a.get("token") == token and owned(a):
-                return True
-            return False
-
-        if uid and uid not in bot_state.accounts and not token:
-            for a in accounts:
-                if str(a.get("uid", "")) == uid:
-                    token = a.get("token", "")
-                    break
-
-        accounts = [a for a in accounts if not matches(a)]
-        _write_accounts(accounts)
-
-        if uid and uid in bot_state.accounts:
-            if is_admin or (user and bot_state.accounts[uid].get("owner_user_id") == user["id"]):
-                account = bot_state.accounts[uid]
-                worker_keys = {uid, str(account.get("token", ""))[:10]}
-                workers_to_cancel = []
-                for worker_key, worker in list(bot_state.account_workers.items()):
-                    if worker_key in worker_keys or worker_key == uid or (token and worker_key == token[:10]):
-                        bot_state.account_workers.pop(worker_key, None)
-                        if worker and not worker.done():
-                            worker.cancel()
-                            workers_to_cancel.append(worker)
-                if workers_to_cancel:
-                    await asyncio.gather(*workers_to_cancel, return_exceptions=True)
-                bot_state._paused.pop(uid, None)
-                for key, credential in list(bot_state.account_credentials.items()):
-                    if key == uid or str(credential.get("account_id", "")) == uid or str(credential.get("auth_uid", "")) == uid:
-                        bot_state.account_credentials.pop(key, None)
-                del bot_state.accounts[uid]
-                bot_state.recalc_totals()
-
-        bot_state.log(f"Node {uid or token[:10]} removed", "warning", uid)
+        await _purge_account(ids)
+        bot_state.log(f"Node {uid or token[:10]} removed permanently", "warning", uid)
         return _json({"status": "ok"})
     except Exception as e:
         return _json({"status": "error", "error": str(e)})
@@ -1112,16 +1191,17 @@ async def handle_admin_users_delete(request: web.Request):
         user = next((u for u in user_store.all_users() if u["id"] == user_id), None)
         if not user:
             return _json({"status": "error", "error": "User not found"})
-        accounts = _read_accounts()
-        before = len(accounts)
-        accounts = [a for a in accounts if a.get("owner_user_id") != user_id]
-        removed = before - len(accounts)
-        _write_accounts(accounts)
-        for uid in list(bot_state.accounts.keys()):
-            if bot_state.accounts[uid].get("owner_user_id") == user_id:
-                del bot_state.accounts[uid]
-                if uid in bot_state.account_workers:
-                    bot_state.account_workers[uid].cancel()
+        file_accounts = _read_accounts()
+        groups = []
+        for a in file_accounts:
+            if a.get("owner_user_id") == user_id:
+                groups.append(_collect_identities(a.get("uid", ""), a.get("token", ""), file_accounts))
+        for live_uid, live in list(bot_state.accounts.items()):
+            if live.get("owner_user_id") == user_id:
+                groups.append(_collect_identities(live_uid, "", file_accounts))
+        all_ids = set().union(*groups) if groups else set()
+        removed = sum(1 for a in file_accounts if a.get("owner_user_id") == user_id)
+        await _purge_account(all_ids)
         user_store.delete(user["username"])
         bot_state.log(f"User {user['username']} deleted ({removed} accounts removed)", "warning")
         return _json({"status": "ok"})
@@ -1132,30 +1212,54 @@ async def handle_admin_users_delete(request: web.Request):
 async def handle_admin_credentials(request: web.Request):
     if not _get_admin(request):
         return _json({"status": "error", "error": "Admin only"}, 403)
-    accounts = _read_accounts()
+    file_accounts = _read_accounts()
     out = []
-    live_uids = set(bot_state.accounts)
-    for a in accounts:
-        uid = str(a.get("uid", "")).strip()
-        token = str(a.get("token", ""))
-        live = bot_state.accounts.get(uid, {})
-        resolved_uid = uid or str(live.get("uid", ""))
-        if resolved_uid not in live_uids:
-            continue
-        credential = dict(bot_state.account_credentials.get(resolved_uid, {}))
-        out.append({
-            "uid": resolved_uid,
-            "nickname": live.get("nickname", credential.get("nickname", "")),
-            "password": a.get("password", ""),
-            "token": token or credential.get("access_token", "") or credential.get("token", ""),
-            "has_token": bool(token or credential.get("access_token") or credential.get("token")),
-            "owner_username": a.get("owner_username", live.get("owner_username", "")),
+    covered_live = set()
+
+    def _find_credential(ids: set) -> Dict:
+        for i in ids:
+            if i in bot_state.account_credentials:
+                return bot_state.account_credentials[i]
+        return {}
+
+    def _row(game_uid: str, login_uid: str, password: str, token: str, owner: str, ids: set) -> Dict:
+        live = bot_state.accounts.get(game_uid, {}) if game_uid else {}
+        credential = _find_credential(ids)
+        access_token = token or credential.get("access_token", "") or credential.get("auth_token", "")
+        return {
+            "uid": game_uid or login_uid,
+            "login_uid": login_uid,
+            "nickname": live.get("nickname") or credential.get("nickname", ""),
+            "password": password or credential.get("auth_password", ""),
+            "token": access_token,
+            "has_token": bool(access_token),
+            "owner_username": owner or live.get("owner_username", "") or credential.get("owner_username", ""),
             "status": live.get("status", "OFFLINE"),
-            "level": live.get("level", 0),
-            "current_exp": live.get("current_exp", 0),
+            "level": live.get("level", credential.get("level", 0)),
+            "current_exp": live.get("current_exp", credential.get("exp", 0)),
             "gained_exp": live.get("gained_exp", 0),
             "last_updated_at": live.get("last_updated_at", 0),
-        })
+        }
+
+    for a in file_accounts:
+        login_uid = str(a.get("uid", "") or "").strip()
+        token = str(a.get("token", "") or "").strip()
+        ids = _collect_identities(login_uid, token, file_accounts)
+        if not ids or bot_state.is_deleted(*ids):
+            continue
+        game_uid = next((i for i in ids if i in bot_state.accounts), "")
+        if game_uid:
+            covered_live.add(game_uid)
+        out.append(_row(game_uid, login_uid, str(a.get("password", "") or ""), token,
+                        str(a.get("owner_username", "") or ""), ids))
+
+    for game_uid in list(bot_state.accounts):
+        if game_uid in covered_live:
+            continue
+        ids = _collect_identities(game_uid, "", file_accounts)
+        credential = _find_credential(ids)
+        out.append(_row(game_uid, str(credential.get("auth_uid", "") or ""), "", "", "", ids))
+
     return _json({"status": "ok", "credentials": out})
 
 
