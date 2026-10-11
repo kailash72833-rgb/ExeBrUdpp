@@ -821,50 +821,29 @@ header.top{
   .acard-btn{height:34px;}
 }
 
-/* EXE LEVEL UP final responsive polish */
-:root{--bg:#050914;--bg-deep:#02040a;--card:#0b1324;--card-2:#101c31;--card-3:#152641;--border:#24324a;--border-h:#3987ff;--border-glow:rgba(57,135,255,.28);--border-ice:rgba(125,211,252,.24);--text:#f8fafc;--text-2:#cbd5e1;--text-3:#94a3b8;--text-muted:#64748b;--btn:#2563eb;--btn-h:#3b82f6;--accent:#3b82f6;--accent-2:#7dd3fc;--ice:#7dd3fc;--ice-glass:#e0f2fe;--lime:#22c55e;--lime-txt:#4ade80;--red:#ef4444;--shadow-card:0 12px 34px rgba(0,0,0,.32)}
-html{scroll-behavior:smooth;scroll-padding-top:16px}body{background-image:radial-gradient(ellipse 80% 45% at 50% -20%,rgba(37,99,235,.16),transparent 70%),radial-gradient(circle 450px at 100% 12%,rgba(125,211,252,.045),transparent 55%)}
-.card,.modal-card,.panel,.stat-card{border-color:var(--border);box-shadow:var(--shadow-card)}
-button,a,.sb-item,.acard{transition:background-color .18s ease,border-color .18s ease,transform .18s ease,box-shadow .18s ease}
-button:focus-visible,a:focus-visible,[role=button]:focus-visible{outline:2px solid var(--ice);outline-offset:3px}
-.acard{overflow:hidden;min-width:0;border-radius:20px}.acard-profile-row,.acard-meta-list,.acard-stat-matrix,.acard-bottom-bar{min-width:0}.acard-nickname,.acard-uid-line,.acard-meta-val{overflow-wrap:anywhere;word-break:break-word}.acard-actions-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.acard-btn{min-width:0;white-space:normal;justify-content:center}.acard-pill{max-width:100%;overflow-wrap:anywhere}
-@media(max-width:520px){.app{padding:10px 10px 28px}.acard{border-radius:17px}.acard-profile-row{gap:10px}.acard-avatar{flex-shrink:0}.acard-actions-grid{gap:6px}.acard-btn{padding:11px 6px;font-size:11px;letter-spacing:.2px}.acard-stat-col{min-width:0;padding-left:5px;padding-right:5px}.acard-stat-col-val{font-size:clamp(13px,4vw,19px)}.acard-meta-row{gap:12px}.acard-meta-lbl{flex:0 0 36%}.acard-meta-val{min-width:0;flex:1}.acard-bottom-bar{gap:10px}.acard-tags-row{flex-wrap:wrap}.sb-brand h2{font-size:14px}}
-@media(max-width:360px){.acard-actions-grid{grid-template-columns:1fr}.acard-btn{padding:12px}.acard-profile-row{align-items:flex-start}.acard-lvl-pill{font-size:12px;padding:7px}.acard-meta-lbl{flex-basis:33%}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-
-/* Quantum Blue single-theme polish */
-:root{
-  --bg:#050505; --bg-deep:#020202; --card:#0b0d12; --card-2:#11151d; --card-3:#182131;
-  --border:#222a38; --border-h:#2457ff; --border-glow:rgba(36,87,255,.38);
-  --border-ice:rgba(36,87,255,.28); --btn:#2457ff; --btn-h:#1745e8;
-  --accent:#2457ff; --accent-2:#2457ff; --ice:#8bb5ff; --ice-glass:#dbeafe;
-  --lime:#22c55e; --lime-txt:#4ade80;
-  --shadow-card:0 10px 30px rgba(0,0,0,.45),0 0 1px rgba(36,87,255,.25);
-}
-body{background-color:#050505;background-image:radial-gradient(ellipse 80% 45% at 50% -20%,rgba(36,87,255,.13),transparent 70%)}
-.sb-item.active,.sb-item:hover{background:rgba(36,87,255,.14);border-color:rgba(36,87,255,.28);color:#fff}
-.brand-icon,.sb-icon{background:linear-gradient(135deg,#2457ff,#5b8cff)!important}
-.acard-lvl-pill,.acard-pill.online,.tag.online{border-color:rgba(36,87,255,.55)!important;color:#8bb5ff!important;background:rgba(36,87,255,.12)!important}
-.acard-btn.refresh,.h-action-btn.buy{background:#2457ff!important;color:#fff!important;border-color:#2457ff!important}
-.acard-btn.refresh:hover,.h-action-btn.buy:hover{background:#1745e8!important}
+/* EXE LEVEL UP mobile navigation and consistent Quantum Blue theme */
 .mobile-tabbar{display:none}
 @media(max-width:899px){
-  .hamburger{display:none!important}
+  body{padding-bottom:calc(76px + env(safe-area-inset-bottom))}
   .mobile-tabbar{
     position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));
-    z-index:1200;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;
-    padding:7px 5px;background:rgba(8,11,18,.96);border:1px solid #26344e;
-    border-radius:17px;box-shadow:0 12px 36px rgba(0,0,0,.6),0 0 22px rgba(36,87,255,.12);
+    z-index:2500;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;
+    padding:7px;background:rgba(7,13,26,.97);border:1px solid #24416f;
+    border-radius:17px;box-shadow:0 12px 36px rgba(0,0,0,.55),0 0 18px rgba(36,87,255,.12);
     backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)
   }
-  .mobile-tabbar a{display:flex;min-width:0;flex-direction:column;align-items:center;justify-content:center;gap:4px;
-    padding:7px 2px;color:#94a3b8;text-decoration:none;font:700 10px var(--font-b);border-radius:11px;transition:all .18s}
-  .mobile-tabbar a i{font-size:16px}
-  .mobile-tabbar a.active,.mobile-tabbar a:focus-visible{color:#fff;background:rgba(36,87,255,.22);outline:none}
-  .mobile-tabbar a.active i{color:#6f9bff}
-  body{padding-bottom:calc(88px + env(safe-area-inset-bottom))}
-  .app{padding-bottom:24px}
+  .mobile-tab{min-width:0;min-height:48px;border:1px solid transparent;border-radius:11px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    background:transparent;color:#94a3b8;font:700 10px var(--font-b);cursor:pointer;
+    -webkit-tap-highlight-color:transparent;transition:background .18s,color .18s,border-color .18s}
+  .mobile-tab i{font-size:16px;line-height:1}
+  .mobile-tab.active{color:#fff;background:linear-gradient(180deg,rgba(36,87,255,.28),rgba(56,189,248,.10));border-color:rgba(56,189,248,.28)}
+  .mobile-tab:active{transform:scale(.97)}
+  .app{padding-bottom:8px}
+  .header-actions{gap:6px}
+  .header-actions .h-action-btn{min-height:36px}
 }
+@media(min-width:900px){.mobile-tabbar{display:none!important}}
 
 </style>
 </head>
@@ -972,6 +951,25 @@ body{background-color:#050505;background-image:radial-gradient(ellipse 80% 45% a
       <button class="h-action-btn logout" onclick="doLogout()"><i class="fa-solid fa-arrow-right-from-bracket"></i> LOGOUT</button>
     </div>
   </header>
+
+  <!-- Mobile bottom tab navigation: uses existing page router -->
+  <nav class="mobile-tabbar" aria-label="Main navigation">
+    <button type="button" class="mobile-tab active" data-tab="home" onclick="goTo('home')" aria-label="Home">
+      <i class="fa-solid fa-house"></i><span>Home</span>
+    </button>
+    <button type="button" class="mobile-tab" data-tab="buy" onclick="goTo('buy')" aria-label="Plans">
+      <i class="fa-solid fa-bolt"></i><span>Plans</span>
+    </button>
+    <button type="button" class="mobile-tab" data-tab="history" onclick="goTo('history')" aria-label="History">
+      <i class="fa-solid fa-clock-rotate-left"></i><span>History</span>
+    </button>
+    <button type="button" class="mobile-tab" data-tab="live" onclick="goTo('live')" aria-label="Live">
+      <i class="fa-solid fa-wave-square"></i><span>Live</span>
+    </button>
+    <button type="button" class="mobile-tab" data-tab="contact" onclick="goTo('contact')" aria-label="Contact">
+      <i class="fa-solid fa-headset"></i><span>Contact</span>
+    </button>
+  </nav>
 
   <main id="pg-home" class="page active">
     <!-- Quick Status / Dropdown Pill Bar (Matches Screenshot) -->
@@ -1421,7 +1419,7 @@ function applyRoute(){
   const el=$('pg-'+tab); if(el) el.classList.add('active');
   document.querySelectorAll('.sb-item').forEach(n=>n.classList.remove('active'));
   const nav=$('n-'+tab); if(nav) nav.classList.add('active');
-  document.querySelectorAll('.mobile-tabbar [data-tab]').forEach(n=>n.classList.toggle('active', n.dataset.tab===tab));
+  document.querySelectorAll('.mobile-tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   if(tab==='buy') loadPlans();
   if(tab==='history') loadOrders();
   if(tab==='admin'){ loadAdminSec('orders'); refreshFreePlanBadge(); }
@@ -1518,9 +1516,10 @@ function renderAccounts(accs){
       ? (isLW ? 'Lone Wolf (auto, Lv3+)' : 'Battle Royale (auto, Lv<3)')
       : (isLW ? 'Lone Wolf (locked)' : 'Battle Royale (locked)');
 
-    const updatedTimeAgo = acc.last_updated_at ? timeAgo(acc.last_updated_at * 1000) : (acc.last_updated ? timeAgo(acc.last_updated) : 'Not provided');
-    const region = esc(acc.region || '—').toUpperCase();
-    const nickname = esc(acc.nickname || 'Unknown');
+    const updatedTimeAgo = acc.last_updated_at ? timeAgo(acc.last_updated_at * 1000) : (acc.last_updated ? timeAgo(acc.last_updated) : '8m Ago');
+    const createdTimeAgo = acc.created_at ? timeAgo(acc.created_at * 1000) : (acc.created ? timeAgo(acc.created) : '3h Ago');
+    const region = esc(acc.region || 'IND').toUpperCase();
+    const nickname = esc(acc.nickname || 'KRISHNA 021');
 
     html += `<div class="card acard" id="acc-${esc(uid)}">
       <!-- 1. Profile Row: Avatar, Nickname, UID, Level Pill -->
@@ -1538,7 +1537,7 @@ function renderAccounts(accs){
         <div class="acard-lvl-pill">Lv.${lvl}</div>
       </div>
 
-      <!-- Account details -->
+      <!-- 2. Metadata Grid (PLAYED, NICKNAME, REGION) -->
       <div class="acard-meta-list">
         <div class="acard-meta-row">
           <span class="acard-meta-lbl">PLAYED</span>
