@@ -799,7 +799,38 @@ header.top{
 .st.rejected,.st.failed{background:rgba(192,53,43,0.08);color:var(--red);border-color:rgba(192,53,43,0.35)}
 
 /* TOASTS */
-#toasts{position:fixed;bottom:20px;right:20px;z-index:3000;display:flex;flex-direction:column;gap:8px}
+#toasts{position:fixed;top:calc(env(safe-area-inset-top,0px) + 14px);bottom:auto;right:16px;left:auto;z-index:5000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none;max-width:calc(100vw - 24px)}
+.toast{pointer-events:auto;position:relative;overflow:hidden;max-width:min(380px,calc(100vw - 24px));animation:toastIn .4s cubic-bezier(.2,.9,.3,1.15) both}
+.toast::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:100%;background:currentColor;opacity:.4;transform-origin:left;animation:toastBar 3.2s linear forwards}
+.toast i{animation:iconPop .5s .15s cubic-bezier(.2,1.6,.4,1) both}
+.toast.out{animation:toastOut .3s ease forwards}
+@keyframes toastIn{from{opacity:0;transform:translateY(-24px) scale(.95)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(-18px) scale(.96)}}
+@keyframes toastBar{to{transform:scaleX(0)}}
+@keyframes iconPop{from{transform:scale(0) rotate(-40deg)}to{transform:none}}
+@media(max-width:600px){#toasts{left:12px;right:12px;align-items:stretch}.toast{max-width:none}}
+
+/* BUTTON / LOADER / CARD ANIMATIONS */
+.btn-spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .65s linear infinite;vertical-align:-2px;flex:none}
+button.busy{pointer-events:none;opacity:.88;filter:saturate(.9)}
+button.busy::after{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(110deg,transparent 30%,rgba(255,255,255,.35) 50%,transparent 70%);background-size:200% 100%;animation:shine 1.1s linear infinite;pointer-events:none}
+button.busy{position:relative;overflow:hidden}
+@keyframes shine{from{background-position:200% 0}to{background-position:-200% 0}}
+.btn-primary:active,.btn-submit:active,.btn-deploy:active,.btn-buy:active,.btn-outline:active,.acard-btn:active{transform:scale(.96)}
+.refresh-spinning i,.refresh-spinning .fa-rotate{animation:spin .8s linear infinite}
+.refresh-spinning{pointer-events:none;opacity:.85}
+.shake{animation:shake .42s ease}
+@keyframes shake{20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(3px)}}
+.acard.new{animation:cardIn .5s cubic-bezier(.2,.8,.3,1) both}
+.acard.removing{animation:cardOut .35s ease forwards;pointer-events:none}
+@keyframes cardIn{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes cardOut{to{opacity:0;transform:scale(.9) translateY(-10px)}}
+.acard.pulse-ok{animation:pulseOk .7s ease}
+@keyframes pulseOk{0%{box-shadow:0 0 0 0 rgba(226,111,74,.45)}100%{box-shadow:0 0 0 14px rgba(226,111,74,0)}}
+.loader.on{display:flex;animation:fadeIn .25s ease both}
+.loader .spin{width:48px;height:48px;border-width:4px;box-shadow:0 0 0 7px rgba(226,111,74,.08);animation:spin .85s cubic-bezier(.5,.1,.5,.9) infinite}
+.loader-text::after{content:"";animation:dots 1.3s steps(4,end) infinite}
+@keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%,100%{content:"..."}}
 .toast{background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:10px;box-shadow:0 8px 25px rgba(80,50,25,0.18);transition:all .2s}
 .toast.success{border-color:rgba(46,125,79,0.5);color:var(--ok)}
 .toast.error{border-color:rgba(192,53,43,0.5);color:var(--red)}
@@ -1274,8 +1305,14 @@ let lastAccountsSig = '';
 function $(id){ return document.getElementById(id); }
 function esc(s){ if(s==null) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(n){ return Number(n||0).toLocaleString(); }
+function btnBusy(btn,on,label){
+  if(!btn) return;
+  if(on){ if(!btn.dataset.orig) btn.dataset.orig=btn.innerHTML; btn.disabled=true; btn.classList.add('busy'); btn.innerHTML='<span class="btn-spin"></span><span>'+(label||'Please wait')+'</span>'; }
+  else { btn.disabled=false; btn.classList.remove('busy'); if(btn.dataset.orig){ btn.innerHTML=btn.dataset.orig; delete btn.dataset.orig; } }
+}
+function shake(el){ if(!el) return; el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
 function setLoader(show, text){ const el=$('loader'); if(text) $('loader-text').innerText=text; el.classList.toggle('on',!!show); }
-function toast(msg, type='info'){ const c=$('toasts'); const t=document.createElement('div'); t.className='toast '+type; const ic=type==='success'?'fa-circle-check':type==='error'?'fa-triangle-exclamation':type==='warning'?'fa-bell':'fa-circle-info'; t.innerHTML=`<i class="fa-solid ${ic}"></i><span>${esc(msg)}</span>`; c.appendChild(t); setTimeout(()=>{ t.style.transition='opacity .3s'; t.style.opacity='0'; setTimeout(()=>t.remove(),300); },3200); }
+function toast(msg, type='info'){ const c=$('toasts'); const t=document.createElement('div'); t.className='toast '+type; const ic=type==='success'?'fa-circle-check':type==='error'?'fa-triangle-exclamation':type==='warning'?'fa-bell':'fa-circle-info'; t.innerHTML=`<i class="fa-solid ${ic}"></i><span>${esc(msg)}</span>`; c.appendChild(t); while(c.children.length>4) c.firstChild.remove(); setTimeout(()=>{ t.classList.add('out'); setTimeout(()=>t.remove(),300); },3200); }
 function closeM(id){ $(id).classList.remove('on'); }
 function openM(id){ $(id).classList.add('on'); }
   function copyTo(txt){ navigator.clipboard.writeText(txt).then(()=>toast('Copied','success')).catch(()=>prompt('Copy:',txt)); }
@@ -1299,26 +1336,26 @@ function switchAuth(mode){ const isIn = mode==='signin'; $('tab-signin').classLi
 async function doLogin(e){
   e.preventDefault();
   const u=$('si-identity').value.trim().toLowerCase(), p=$('si-pass').value;
-  const btn=$('btn-si'); btn.disabled=true; setLoader(true,'SIGNING IN...');
+  const btn=$('btn-si'); btnBusy(btn,true,'Signing in'); setLoader(true,'SIGNING IN');
   try{
     const r=await fetch('/api/user/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identity:u,username:u,password:p})});
-    const d=await r.json(); setLoader(false); btn.disabled=false;
+    const d=await r.json(); setLoader(false); btnBusy(btn,false);
     if(d.status==='ok' && d.token){ token=d.token; user=d.user; localStorage.setItem('nxc_token', token); toast('Welcome '+user.username,'success'); enterApp(); }
-    else toast(d.error||'Login failed','error');
-  }catch(err){ setLoader(false); btn.disabled=false; toast('Network error: '+err.message,'error'); }
+    else { toast(d.error||'Login failed','error'); shake(btn); }
+  }catch(err){ setLoader(false); btnBusy(btn,false); toast('Network error: '+err.message,'error'); }
 }
 
 async function doRegister(e){
   e.preventDefault();
   const u=$('su-user').value.trim().toLowerCase(), email=$('su-email').value.trim().toLowerCase(), p=$('su-pass').value, cp=$('su-confirm').value;
   if(p!==cp){ toast('Passwords do not match','error'); return; }
-  const btn=$('btn-su'); btn.disabled=true; setLoader(true,'CREATING ACCOUNT...');
+  const btn=$('btn-su'); btnBusy(btn,true,'Creating account'); setLoader(true,'CREATING ACCOUNT');
   try{
     const r=await fetch('/api/user/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,email,password:p,display_name:u})});
-    const d=await r.json(); setLoader(false); btn.disabled=false;
+    const d=await r.json(); setLoader(false); btnBusy(btn,false);
     if(d.status==='ok' && d.token){ token=d.token; user=d.user; localStorage.setItem('nxc_token', token); toast('Account created!','success'); enterApp(); }
-    else toast(d.error||'Registration failed','error');
-  }catch(err){ setLoader(false); btn.disabled=false; toast('Network error: '+err.message,'error'); }
+    else { toast(d.error||'Registration failed','error'); shake(btn); }
+  }catch(err){ setLoader(false); btnBusy(btn,false); toast('Network error: '+err.message,'error'); }
 }
 
 async function doLogout(silent){
@@ -1455,8 +1492,11 @@ function updatePlanTimer(secs, adm, expired){
   tick(); planTimer = setInterval(tick, 1000);
 }
 
+window._seenAcc = window._seenAcc || null;
 function renderAccounts(accs){
   const box=$('accList');
+  if(window._seenAcc===null) window._seenAcc=new Set();
+  let _newIdx=0;
   if(!accs.length){
     box.innerHTML = `<div class="empty"><i class="fa-solid fa-ghost"></i><h3>No Accounts Connected</h3><p>Add your first FreeFire account to start leveling up.</p><button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button></div>`;
     return;
@@ -1502,7 +1542,9 @@ function renderAccounts(accs){
     const region = esc(acc.region || 'IND').toUpperCase();
     const nickname = esc(acc.nickname || 'KRISHNA 021');
 
-    html += `<div class="card acard" id="acc-${esc(uid)}">
+    const _isNew = !window._seenAcc.has(uid); window._seenAcc.add(uid);
+    const _anim = _isNew ? ` new" style="animation-delay:${Math.min(_newIdx++,8)*55}ms` : '';
+    html += `<div class="card acard${_anim}" id="acc-${esc(uid)}">
       <!-- 1. Profile Row: Avatar, Nickname, UID, Level Pill -->
       <div class="acard-profile-row">
         <div class="acard-profile-left">
@@ -1612,12 +1654,32 @@ function renderAccounts(accs){
   box.innerHTML = html;
 }
 
-window.togglePause = async(uid)=>{ try{ const {d}=await api('/api/account/pause',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast(d.message||'Toggled','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
+window.togglePause = async(uid)=>{
+  window._pausing = window._pausing || {};
+  if(window._pausing[uid]) return;                 // ignore double taps: two taps = pause + resume = "pause does nothing"
+  window._pausing[uid] = true;
+  const card=document.getElementById('acc-'+uid), pb=card?card.querySelector('.acard-btn.pause, .acard-btn.resume'):null;
+  if(pb){ pb.disabled=true; pb.classList.add('refresh-spinning'); }
+  try{
+    const {d}=await api('/api/account/pause',{method:'POST',body:JSON.stringify({uid})});
+    if(d.status==='ok'){ toast(d.paused?'Paused - EXP gain stopped':'Resumed','success'); if(card) card.classList.add('pulse-ok'); lastAccountsSig=''; await fetchStats(); }
+    else toast(d.error||'Failed','error');
+  }catch(e){ toast(e.message,'error'); }
+  finally{ delete window._pausing[uid]; if(pb){ pb.disabled=false; pb.classList.remove('refresh-spinning'); } }
+};
   window.refreshAcc = async(uid)=>{ try{ toast('Refreshing...','info'); await api('/api/account/refresh',{method:'POST',body:JSON.stringify({uid})}); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },800); }catch(e){ toast(e.message,'error'); } };
-  window.refreshAllAccounts = async(btn)=>{ try{ if(btn){btn.disabled=true;btn.classList.add('spin');} toast('Refreshing all account details...','info'); const {d}=await api('/api/account/refresh-all',{method:'POST',body:JSON.stringify({})}); if(d.status==='ok'){ lastAccountsSig=''; await fetchStats(); toast(`Refreshed ${d.refreshed||0} account(s)`,'success'); } else toast(d.error||'Refresh failed','error'); }catch(e){ toast(e.message,'error'); }finally{ if(btn){btn.disabled=false;btn.classList.remove('spin');} } };
+  window.refreshAllAccounts = async(btn)=>{ try{ if(btn){btn.disabled=true;btn.classList.add('refresh-spinning');} toast('Refreshing all account details...','info'); const {d}=await api('/api/account/refresh-all',{method:'POST',body:JSON.stringify({})}); if(d.status==='ok'){ lastAccountsSig=''; await fetchStats(); toast(`Refreshing ${d.refreshed||0} account(s)...`,'success'); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },2500); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },6000); } else toast(d.error||'Refresh failed','error'); }catch(e){ toast(e.message,'error'); }finally{ if(btn){btn.disabled=false;btn.classList.remove('refresh-spinning');} } };
 
 window.restartAcc = async(uid)=>{ if(!confirm('Restart bot for '+uid+'?')) return; try{ const {d}=await api('/api/account/restart',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Restarting...','success'); setTimeout(()=>{ lastAccountsSig=''; fetchStats(); },1200); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
-window.deleteAcc = async(uid)=>{ if(!confirm('Delete '+uid+'?')) return; try{ const {d}=await api('/api/account/delete',{method:'POST',body:JSON.stringify({uid})}); if(d.status==='ok'){ toast('Deleted','success'); lastAccountsSig=''; fetchStats(); } else toast(d.error||'Failed','error'); }catch(e){ toast(e.message,'error'); } };
+window.deleteAcc = async(uid)=>{
+  if(!confirm('Delete '+uid+'?')) return;
+  const card=document.getElementById('acc-'+uid); if(card) card.classList.add('removing');
+  try{
+    const {d}=await api('/api/account/delete',{method:'POST',body:JSON.stringify({uid})});
+    if(d.status==='ok'){ toast('Deleted','success'); lastAccountsSig=''; setTimeout(fetchStats,380); }
+    else { if(card) card.classList.remove('removing'); toast(d.error||'Failed','error'); }
+  }catch(e){ if(card) card.classList.remove('removing'); toast(e.message,'error'); }
+};
 
 window.openAddAccount = ()=>{
   if(!botData) return;
@@ -1661,19 +1723,19 @@ window.submitAccount = async(e)=>{
   const btn = $('btnAddAcc');
   const authType = $('injAuthType').value;
   const mode = $('injMode').value || 'auto';
-  btn.disabled = true;
+  btnBusy(btn,true,'Deploying');
 
   try{
     if(authType === 'bulk'){
       const text = $('injBulk').value.trim();
-      if(!text){ toast('Paste accounts first','warning'); btn.disabled=false; return; }
+      if(!text){ toast('Paste accounts first','warning'); btnBusy(btn,false); return; }
       const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
       const accounts = [];
       for(const l of lines){
         const parts = l.split(/[:\s,|]+/).filter(Boolean);
         if(parts.length >= 2) accounts.push({uid: parts[0], password: parts[1], mode: mode});
       }
-      if(!accounts.length){ toast('No valid accounts','warning'); btn.disabled=false; return; }
+      if(!accounts.length){ toast('No valid accounts','warning'); btnBusy(btn,false); return; }
       toast(`Deploying ${accounts.length} nodes...`,'info');
       const {r,d} = await api('/api/account/bulk-add',{method:'POST',body:JSON.stringify({accounts})});
       if(r.ok && d.status==='ok'){
@@ -1682,16 +1744,16 @@ window.submitAccount = async(e)=>{
         closeM('injectModal'); $('injBulk').value=''; $('bulkPreview').style.display='none';
         lastAccountsSig='';
         setTimeout(fetchStats, 1000);
-      } else toast(d.error||'Failed','error');
+      } else { toast(d.error||'Failed','error'); shake(btn); }
     } else {
       let payload;
       if(authType==='guest'){
         const uid=$('injUID').value.trim(), pwd=$('injPWD').value.trim();
-        if(!uid||!pwd){ toast('UID & Password required','warning'); btn.disabled=false; return; }
+        if(!uid||!pwd){ toast('UID & Password required','warning'); btnBusy(btn,false); return; }
         payload={uid, password:pwd, mode};
       } else {
         const tok=$('injTOK').value.trim();
-        if(!tok){ toast('Token required','warning'); btn.disabled=false; return; }
+        if(!tok){ toast('Token required','warning'); btnBusy(btn,false); return; }
         payload={token:tok, mode};
       }
       const {r,d}=await api('/api/account/add',{method:'POST',body:JSON.stringify(payload)});
@@ -1701,10 +1763,10 @@ window.submitAccount = async(e)=>{
         $('injUID').value=''; $('injPWD').value=''; $('injTOK').value=''; $('injBulk').value='';
         lastAccountsSig='';
         setTimeout(fetchStats,700);
-      } else toast(d.error||'Failed','error');
+      } else { toast(d.error||'Failed','error'); shake(btn); }
     }
   }catch(err){ toast(err.message,'error'); }
-  btn.disabled = false;
+  btnBusy(btn,false);
 };
 
 async function loadPlans(){ try{ const {d}=await api('/api/plans'); if(d.status==='ok'){ allPlans=(d.plans||[]).filter(p=>p.id!=='free' && Number(p.price_inr)>0); renderPlans(); } }catch(e){} }
