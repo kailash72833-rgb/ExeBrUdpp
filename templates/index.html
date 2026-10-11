@@ -831,6 +831,41 @@ button:focus-visible,a:focus-visible,[role=button]:focus-visible{outline:2px sol
 @media(max-width:520px){.app{padding:10px 10px 28px}.acard{border-radius:17px}.acard-profile-row{gap:10px}.acard-avatar{flex-shrink:0}.acard-actions-grid{gap:6px}.acard-btn{padding:11px 6px;font-size:11px;letter-spacing:.2px}.acard-stat-col{min-width:0;padding-left:5px;padding-right:5px}.acard-stat-col-val{font-size:clamp(13px,4vw,19px)}.acard-meta-row{gap:12px}.acard-meta-lbl{flex:0 0 36%}.acard-meta-val{min-width:0;flex:1}.acard-bottom-bar{gap:10px}.acard-tags-row{flex-wrap:wrap}.sb-brand h2{font-size:14px}}
 @media(max-width:360px){.acard-actions-grid{grid-template-columns:1fr}.acard-btn{padding:12px}.acard-profile-row{align-items:flex-start}.acard-lvl-pill{font-size:12px;padding:7px}.acard-meta-lbl{flex-basis:33%}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* Quantum Blue single-theme polish */
+:root{
+  --bg:#050505; --bg-deep:#020202; --card:#0b0d12; --card-2:#11151d; --card-3:#182131;
+  --border:#222a38; --border-h:#2457ff; --border-glow:rgba(36,87,255,.38);
+  --border-ice:rgba(36,87,255,.28); --btn:#2457ff; --btn-h:#1745e8;
+  --accent:#2457ff; --accent-2:#2457ff; --ice:#8bb5ff; --ice-glass:#dbeafe;
+  --lime:#22c55e; --lime-txt:#4ade80;
+  --shadow-card:0 10px 30px rgba(0,0,0,.45),0 0 1px rgba(36,87,255,.25);
+}
+body{background-color:#050505;background-image:radial-gradient(ellipse 80% 45% at 50% -20%,rgba(36,87,255,.13),transparent 70%)}
+.sb-item.active,.sb-item:hover{background:rgba(36,87,255,.14);border-color:rgba(36,87,255,.28);color:#fff}
+.brand-icon,.sb-icon{background:linear-gradient(135deg,#2457ff,#5b8cff)!important}
+.acard-lvl-pill,.acard-pill.online,.tag.online{border-color:rgba(36,87,255,.55)!important;color:#8bb5ff!important;background:rgba(36,87,255,.12)!important}
+.acard-btn.refresh,.h-action-btn.buy{background:#2457ff!important;color:#fff!important;border-color:#2457ff!important}
+.acard-btn.refresh:hover,.h-action-btn.buy:hover{background:#1745e8!important}
+.mobile-tabbar{display:none}
+@media(max-width:899px){
+  .hamburger{display:none!important}
+  .mobile-tabbar{
+    position:fixed;left:10px;right:10px;bottom:calc(8px + env(safe-area-inset-bottom));
+    z-index:1200;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;
+    padding:7px 5px;background:rgba(8,11,18,.96);border:1px solid #26344e;
+    border-radius:17px;box-shadow:0 12px 36px rgba(0,0,0,.6),0 0 22px rgba(36,87,255,.12);
+    backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)
+  }
+  .mobile-tabbar a{display:flex;min-width:0;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    padding:7px 2px;color:#94a3b8;text-decoration:none;font:700 10px var(--font-b);border-radius:11px;transition:all .18s}
+  .mobile-tabbar a i{font-size:16px}
+  .mobile-tabbar a.active,.mobile-tabbar a:focus-visible{color:#fff;background:rgba(36,87,255,.22);outline:none}
+  .mobile-tabbar a.active i{color:#6f9bff}
+  body{padding-bottom:calc(88px + env(safe-area-inset-bottom))}
+  .app{padding-bottom:24px}
+}
+
 </style>
 </head>
 <body>
@@ -906,7 +941,7 @@ button:focus-visible,a:focus-visible,[role=button]:focus-visible{outline:2px sol
       <div class="brand" onclick="goTo('home')">
         <div class="brand-icon"><i class="fa-solid fa-bolt"></i></div>
         <div>
-          <h1>Krishna Coder <span>LevelUp</span></h1>
+          <h1>EXE <span>LEVEL UP</span></h1>
           <div class="sub">ULTRA EXP ENGINE • OB55</div>
         </div>
       </div>
@@ -1386,6 +1421,7 @@ function applyRoute(){
   const el=$('pg-'+tab); if(el) el.classList.add('active');
   document.querySelectorAll('.sb-item').forEach(n=>n.classList.remove('active'));
   const nav=$('n-'+tab); if(nav) nav.classList.add('active');
+  document.querySelectorAll('.mobile-tabbar [data-tab]').forEach(n=>n.classList.toggle('active', n.dataset.tab===tab));
   if(tab==='buy') loadPlans();
   if(tab==='history') loadOrders();
   if(tab==='admin'){ loadAdminSec('orders'); refreshFreePlanBadge(); }
@@ -1483,9 +1519,6 @@ function renderAccounts(accs){
       : (isLW ? 'Lone Wolf (locked)' : 'Battle Royale (locked)');
 
     const updatedTimeAgo = acc.last_updated_at ? timeAgo(acc.last_updated_at * 1000) : (acc.last_updated ? timeAgo(acc.last_updated) : 'Not provided');
-    const createdRaw = acc.created_at ?? acc.createdAt ?? acc.created ?? null;
-    const createdDate = createdRaw == null || createdRaw === '' ? null : (typeof createdRaw === 'number' ? new Date(createdRaw < 1e12 ? createdRaw * 1000 : createdRaw) : new Date(createdRaw));
-    const createdTimeAgo = createdDate && !Number.isNaN(createdDate.getTime()) ? timeAgo(createdDate.getTime()) : 'Not provided';
     const region = esc(acc.region || '—').toUpperCase();
     const nickname = esc(acc.nickname || 'Unknown');
 
@@ -1505,12 +1538,8 @@ function renderAccounts(accs){
         <div class="acard-lvl-pill">Lv.${lvl}</div>
       </div>
 
-      <!-- 2. Metadata Grid (CREATED, PLAYED, NICKNAME, REGION) -->
+      <!-- Account details -->
       <div class="acard-meta-list">
-        <div class="acard-meta-row">
-          <span class="acard-meta-lbl">CREATED</span>
-          <span class="acard-meta-val">${esc(createdTimeAgo)}</span>
-        </div>
         <div class="acard-meta-row">
           <span class="acard-meta-lbl">PLAYED</span>
           <span class="acard-meta-val">${matches}</span>
