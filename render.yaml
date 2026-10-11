@@ -6,8 +6,9 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python Main.py
     envVars:
+      # REQUIRED: strong admin password (8+ chars). The old default "youadminpass" is rejected.
       - key: ADMIN_PASSWORD
-        value: youadminpass
+        sync: false
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: MONGODB_CONNECTION_STRING
@@ -18,4 +19,16 @@ services:
         sync: false
       - key: ZAPUPI_API_KEY
         sync: false
+      # Public URL of this site (used for the payment webhook + redirects), e.g. https://your-app.onrender.com
+      - key: APP_URL
+        sync: false
+      # Secret that signs payment webhooks. Any long random text.
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      # Optional: ZapUPI order-status URL, lets old/unsigned callbacks be double-checked
+      - key: ZAPUPI_STATUS_URL
+        sync: false
+      # Number of reverse proxies in front of the app (Render / Railway = 1)
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
     autoDeploy: true
