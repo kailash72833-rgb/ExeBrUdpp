@@ -14,6 +14,7 @@ import itertools
 import secrets
 import traceback
 import base64
+import signal
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -35,7 +36,7 @@ import CguTeam_pb2
 import CguFF_pb2
 import thunderFF_pb2
 
-from dashboard_server import bot_state, start_web_dashboard
+from dashboard_server import bot_state, start_web_dashboard, user_store
 
 # ==================== CONFIGURATION ====================
 WEB_HOST = "0.0.0.0"
@@ -53,6 +54,18 @@ MAX_CONCURRENT_MATCHES = 1
 
 EXP_REFRESH_INTERVAL = 12.0
 EXP_REFRESH_AFTER_MATCH_DELAY = 3.0
+
+# ---- speed / fairness when MANY accounts run together ----
+LOGIN_CONCURRENCY = 10           # logins running at the same time (the rest wait in a fair queue)
+REFRESH_CONCURRENCY = 20         # EXP refresh requests at the same time
+VERSION_CACHE_TTL = 900          # Play Store / version server answer is reused for 15 minutes
+EXP_REFRESH_MAX_INTERVAL = 45.0  # with hundreds of accounts the refresh slows down a little instead of choking
+TOKEN_CACHE_FLUSH_INTERVAL = 5.0 # token_cache.json is written in the background, not on every update
+LOGIN_BACKOFF_MAX = 120          # a failing account retries 15s, 30s, 60s, 120s... (not every 15s forever)
+PLAN_GUARD_INTERVAL = 5.0        # how often a running account checks that its plan is still valid
+
+_login_sem = asyncio.Semaphore(LOGIN_CONCURRENCY)
+_refresh_sem = asyncio.Semaphore(REFRESH_CONCURRENCY)
 
 MAX_CONSECUTIVE_PARSE_FAILURES = 5.0
 NON_MATCH_RECONNECT_DELAY = 1.0
@@ -221,8 +234,8 @@ def optimize_udp_socket(sock: socket.socket):
 # ==================== NETWORK & CRYPTO ====================
 client = httpx.AsyncClient(
     verify=False,
-    timeout=10.0,
-    limits=httpx.Limits(max_connections=100, max_keepalive_connections=50)
+    timeout=httpx.Timeout(15.0, connect=8.0, pool=30.0),
+    limits=httpx.Limits(max_connections=400, max_keepalive_connections=100)
 )
 
 headers = {
@@ -359,9 +372,11 @@ async def _get_total_match_count() -> int:
 
 
 # ==================== TOKEN CACHE ====================
-_token_cache_memo: Dict[str, Any] = {}
-_token_cache_memo_time: float = 0.0
-_TOKEN_CACHE_MEMO_TTL = 5.0
+# The cache lives in memory. token_cache.json is only a backup that a background task
+# writes every few seconds - before, EVERY exp refresh re-wrote and re-read the whole file,
+# which froze the bot when many accounts were running.
+_token_cache_store: Optional[Dict[str, Any]] = None
+_token_cache_dirty = False
 
 
 def _json_serializer(obj):
@@ -384,44 +399,69 @@ def _json_deserializer(obj):
 
 
 def _load_token_cache() -> Dict[str, Any]:
-    global _token_cache_memo, _token_cache_memo_time
-    now = time.time()
-    if _token_cache_memo and (now - _token_cache_memo_time) < _TOKEN_CACHE_MEMO_TTL:
-        return _token_cache_memo
-    if not os.path.exists(TOKEN_CACHE_FILE):
-        return {}
-    try:
-        with open(TOKEN_CACHE_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-        if not content:
-            return {}
-        data = json.loads(content)
-        if not isinstance(data, dict):
-            raise ValueError("Cache root must be dict")
-        parsed = _json_deserializer(data)
-        _token_cache_memo = parsed
-        _token_cache_memo_time = now
-        return parsed
-    except Exception as e:
-        print_error(f"Token cache corrupt -> deleting: {e}")
+    global _token_cache_store
+    if _token_cache_store is not None:
+        return _token_cache_store
+    cache: Dict[str, Any] = {}
+    if os.path.exists(TOKEN_CACHE_FILE):
         try:
-            os.remove(TOKEN_CACHE_FILE)
-        except Exception:
-            pass
-        return {}
+            with open(TOKEN_CACHE_FILE, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                data = json.loads(content)
+                if not isinstance(data, dict):
+                    raise ValueError("Cache root must be dict")
+                cache = _json_deserializer(data)
+        except Exception as e:
+            print_error(f"Token cache corrupt -> deleting: {e}")
+            cache = {}
+            try:
+                os.remove(TOKEN_CACHE_FILE)
+            except Exception:
+                pass
+    _token_cache_store = cache
+    return cache
 
 
 def _save_token_cache(cache: Dict[str, Any]):
-    global _token_cache_memo, _token_cache_memo_time
+    global _token_cache_store, _token_cache_dirty
+    _token_cache_store = cache
+    _token_cache_dirty = True
+
+
+def _flush_token_cache_sync():
+    """Write the cache to disk (runs in a worker thread, or directly at shutdown)."""
+    global _token_cache_dirty
+    if not _token_cache_dirty or _token_cache_store is None:
+        return
+    _token_cache_dirty = False
+    text = None
+    for _ in range(4):
+        try:
+            text = json.dumps(_token_cache_store, default=_json_serializer)
+            break
+        except RuntimeError:          # dict changed while serialising -> try again
+            time.sleep(0.05)
+    if text is None:
+        _token_cache_dirty = True
+        return
     try:
         tmp_file = TOKEN_CACHE_FILE + ".tmp"
         with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2, default=_json_serializer)
+            f.write(text)
         os.replace(tmp_file, TOKEN_CACHE_FILE)
-        _token_cache_memo = cache
-        _token_cache_memo_time = time.time()
     except Exception as e:
+        _token_cache_dirty = True
         print_error(f"Token cache save error: {e}")
+
+
+async def token_cache_flusher():
+    while True:
+        await asyncio.sleep(TOKEN_CACHE_FLUSH_INTERVAL)
+        try:
+            await asyncio.to_thread(_flush_token_cache_sync)
+        except Exception as e:
+            print_warning(f"[CACHE] background save failed: {e}")
 
 
 def cache_get(uid: str) -> Optional[Dict]:
@@ -445,7 +485,8 @@ def cache_get(uid: str) -> Optional[Dict]:
 def cache_set(uid: str, account_data: Dict):
     cache = _load_token_cache()
     entry = dict(account_data)
-    entry["cached_at"] = time.time()
+    # small random offset so hundreds of accounts do not all expire (and re-login) in the same second
+    entry["cached_at"] = time.time() - random.uniform(0, 180)
     cache[str(uid)] = entry
     _save_token_cache(cache)
     print_success(f"[CACHE] Saved credentials for UID {uid}")
@@ -489,17 +530,34 @@ async def aes_encrypt(payload, key, iv):
     return cipher.encrypt(pad(payload, AES.block_size))
 
 
+_version_state: Dict[str, Any] = {"app_version": None, "app_time": 0.0, "config": None, "config_time": 0.0}
+_version_lock = asyncio.Lock()
+
+
 async def get_playstore_version():
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: play_scraper('com.dts.freefireth', lang='hi', country='id')
-    )
-    return result.get("version")
+    now = time.time()
+    if _version_state["app_version"] and now - _version_state["app_time"] < VERSION_CACHE_TTL * 2:
+        return _version_state["app_version"]
+    loop = asyncio.get_running_loop()
+    try:
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, lambda: play_scraper('com.dts.freefireth', lang='hi', country='id')),
+            timeout=25
+        )
+        version = result.get("version")
+        if version:
+            _version_state["app_version"] = version
+            _version_state["app_time"] = time.time()
+            return version
+    except Exception as e:
+        print_warning(f"[VERSION] Play Store lookup failed: {e}")
+    return _version_state["app_version"]      # last known version (None only if we never had one)
 
 
-async def version_config():
+async def _fetch_version_config():
     app_version = await get_playstore_version()
+    if not app_version:
+        return None
     api_url = (
         "https://version.ggwhitehawk.com/live/ver.php"
         f"?version={app_version}"
@@ -519,6 +577,25 @@ async def version_config():
         return latest_release_version, remote_version, server_url
     except Exception:
         return None
+
+
+async def version_config():
+    """Shared by every login. It used to hit the Play Store + version server once PER login,
+    which was the main reason logins got slow when many accounts were running."""
+    now = time.time()
+    cfg = _version_state["config"]
+    if cfg and now - _version_state["config_time"] < VERSION_CACHE_TTL:
+        return cfg
+    async with _version_lock:
+        cfg = _version_state["config"]
+        if cfg and time.time() - _version_state["config_time"] < VERSION_CACHE_TTL:
+            return cfg
+        fresh = await _fetch_version_config()
+        if fresh:
+            _version_state["config"] = fresh
+            _version_state["config_time"] = time.time()
+            return fresh
+        return cfg       # stale answer is better than failing every login
 
 
 async def get_access_token(uid, password):
@@ -1655,10 +1732,10 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         await send_start_match()
 
                     try:
-                        data = await asyncio.wait_for(reader.read(8192), timeout=0.5)
+                        data = await asyncio.wait_for(reader.read(8192), timeout=1.0)
                     except asyncio.TimeoutError:
                         no_response_count += 1
-                        if no_response_count > 80:
+                        if no_response_count > 40:
                             print_warning(f"[FUNCTIONAL] Gateway silent ({uid_str}). Reconnecting...")
                             raise ConnectionError("Gateway idle timeout")
                         continue
@@ -1932,7 +2009,8 @@ async def refresh_account_profile(account_data_or_uid: Any):
             return
         res = None
         try:
-            res = await send_getlogin(payload, url, token, release_version)
+            async with _refresh_sem:
+                res = await send_getlogin(payload, url, token, release_version)
         except Exception as e:
             print_error(f"[EXP-REFRESH] send_getlogin exception for {uid}: {e}")
             return
@@ -1997,8 +2075,6 @@ async def refresh_account_profile(account_data_or_uid: Any):
             print_success(f"[LEVEL UP] UID {acc_id} : Lvl {old_level} -> {level} (EXP {old_exp} -> {exp})")
         elif old_exp != exp:
             print_success(f"[EXP] UID {acc_id} Lvl {level} | EXP {old_exp} -> {exp} (+{exp - old_exp})")
-        else:
-            print_info(f"[EXP-REFRESH] UID {acc_id} -> Level: {level}, EXP: {exp}")
     except Exception as e:
         print_error(f"refresh_account_profile error: {e}")
         traceback.print_exc()
@@ -2178,10 +2254,38 @@ def _mode_label(mode: str, level: int) -> str:
     return "Lone Wolf" if level >= LONE_WOLF_UNLOCK_LEVEL else "Battle Royale"
 
 
-async def run_account_worker(account_data: Dict, label: str, mode: str = "auto"):
+def _worker_ids(account_data: Dict) -> List[str]:
+    tok = account_data.get('auth_token') or ''
+    return [str(x) for x in (account_data.get('account_id'), account_data.get('auth_uid'), tok, tok[:10]) if x]
+
+
+async def _wait_until_allowed(owner_id: str, *ids) -> bool:
+    """Block while the owner's plan is expired / the account is over its slot limit.
+    Returns False if the account was deleted meanwhile."""
+    announced = False
+    while bot_state.is_blocked(owner_id, *ids):
+        if bot_state.is_deleted(*ids):
+            return False
+        if not announced:
+            print_warning(f"[PLAN] {ids[0]} stopped: plan expired or over slot limit. Waiting for renewal...")
+            announced = True
+        try:
+            bot_state.update_status(str(ids[0]), "EXPIRED", 0)
+        except Exception:
+            pass
+        await asyncio.sleep(PLAN_GUARD_INTERVAL * 2)
+    if announced:
+        print_success(f"[PLAN] {ids[0]} allowed again -> starting")
+    return True
+
+
+async def run_account_worker(account_data: Dict, label: str, mode: str = "auto", owner_user_id: str = ""):
     acc_id = str(account_data['account_id'])
+    owner_id = str(owner_user_id or account_data.get('owner_user_id') or "")
     informational_task = None
     exp_task = None
+    functional_task = None
+    guard_task = None
     try:
         reg = account_data.get('region', 'ID')
         tcp_packet_online = await build_tcp_startup_packet(
@@ -2197,6 +2301,12 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
                           account_data['aes_ak'], account_data['iv_i'], region=reg)
         )
 
+        def _next_exp_delay() -> float:
+            # few accounts -> every 12s; hundreds of accounts -> slower (max 45s) + random spread
+            n = max(1, len(bot_state.accounts))
+            base = max(EXP_REFRESH_INTERVAL, min(EXP_REFRESH_MAX_INTERVAL, n * 0.12))
+            return base + random.uniform(0, base * 0.25)
+
         async def exp_refresher():
             try:
                 fresh = bot_state.account_credentials.get(acc_id)
@@ -2205,7 +2315,7 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
             except Exception as e:
                 print_warning(f"[EXP-REFRESH] initial refresh error ({acc_id}): {e}")
             while True:
-                await asyncio.sleep(EXP_REFRESH_INTERVAL)
+                await asyncio.sleep(_next_exp_delay())
                 if bot_state.is_deleted(acc_id):
                     return
                 try:
@@ -2214,6 +2324,12 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
                         await refresh_account_profile(fresh)
                 except Exception as e:
                     print_warning(f"[EXP-REFRESH] periodic refresh error ({acc_id}): {e}")
+
+        async def plan_guard():
+            while True:
+                await asyncio.sleep(PLAN_GUARD_INTERVAL)
+                if bot_state.is_blocked(owner_id, *_worker_ids(account_data)):
+                    return True
 
         exp_task = asyncio.create_task(exp_refresher())
         functional_task = asyncio.create_task(
@@ -2226,16 +2342,31 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
                 mode=mode
             )
         )
-        await functional_task
+        guard_task = asyncio.create_task(plan_guard())
+        done, _pending = await asyncio.wait({functional_task, guard_task}, return_when=asyncio.FIRST_COMPLETED)
+        if guard_task in done and not functional_task.done():
+            print_warning(f"[PLAN] {acc_id} stopped: plan expired or over slot limit")
+            functional_task.cancel()
+            try:
+                await functional_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                bot_state.update_status(acc_id, "EXPIRED", 0)
+            except Exception:
+                pass
+        else:
+            await functional_task          # re-raises errors exactly like before
     except asyncio.CancelledError:
         raise
     except Exception as e:
         print_error(f"run_account_worker error for {label}: {e}")
     finally:
-        for t in (informational_task, exp_task):
+        tasks = (informational_task, exp_task, functional_task, guard_task)
+        for t in tasks:
             if t and not t.done():
                 t.cancel()
-        for t in (informational_task, exp_task):
+        for t in tasks:
             if t:
                 try:
                     await t
@@ -2245,32 +2376,43 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto")
 
 async def account_loop_guest(uid: str, password: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
+    fail_count = 0
+    await asyncio.sleep(random.uniform(0, 2.0))          # spread the start-up of many accounts
     while True:
         if bot_state.is_deleted(uid):
             print_warning(f"[DELETE] Guest UID {uid} deleted -> worker exit")
             break
         try:
+            if not await _wait_until_allowed(owner_user_id, uid):
+                print_warning(f"[DELETE] Guest UID {uid} deleted while waiting -> worker exit")
+                break
             print_info(f"[LOGIN] Starting login for Guest UID: {uid} (mode: {mode})...")
             try:
                 bot_state.update_status(str(uid), "CONNECTING")
             except Exception:
                 pass
-            account_data = await process_account_uid_pass(
-                uid, password, owner_user_id=owner_user_id,
-                owner_username=owner_username, mode=mode
-            )
+            async with _login_sem:                       # fair queue: max LOGIN_CONCURRENCY logins at once
+                if bot_state.is_deleted(uid):
+                    continue
+                account_data = await process_account_uid_pass(
+                    uid, password, owner_user_id=owner_user_id,
+                    owner_username=owner_username, mode=mode
+                )
             if bot_state.is_deleted(uid, (account_data or {}).get('account_id')):
                 print_warning(f"[DELETE] Guest UID {uid} deleted during login -> worker exit")
                 break
             if not account_data:
-                print_error(f"Login failed for UID: {uid}. Retrying in 15 seconds...")
+                fail_count += 1
+                delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
+                print_error(f"Login failed for UID: {uid}. Retrying in {delay} seconds...")
                 try:
                     bot_state.update_status(str(uid), "ERROR")
                 except Exception:
                     pass
-                await asyncio.sleep(15)
+                await asyncio.sleep(delay + random.uniform(0, 3))
                 continue
-            await run_account_worker(account_data, uid, mode=mode)
+            fail_count = 0
+            await run_account_worker(account_data, uid, mode=mode, owner_user_id=owner_user_id)
             print_warning(f"Session finished for {uid}. Reconnecting in 3s...")
             await asyncio.sleep(3)
         except asyncio.CancelledError:
@@ -2288,25 +2430,36 @@ async def account_loop_guest(uid: str, password: str, mode: str = "auto",
 async def account_loop_token(token: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
     token_label = token[:10]
+    fail_count = 0
+    await asyncio.sleep(random.uniform(0, 2.0))
     while True:
         if bot_state.is_deleted(token, token_label):
             print_warning(f"[DELETE] Token {token_label} deleted -> worker exit")
             break
         try:
+            if not await _wait_until_allowed(owner_user_id, token_label, token):
+                print_warning(f"[DELETE] Token {token_label} deleted while waiting -> worker exit")
+                break
             print_info(f"[LOGIN] Starting login with Access Token (mode: {mode})...")
-            account_data = await process_account_token(
-                token, owner_user_id=owner_user_id,
-                owner_username=owner_username, mode=mode
-            )
+            async with _login_sem:
+                if bot_state.is_deleted(token, token_label):
+                    continue
+                account_data = await process_account_token(
+                    token, owner_user_id=owner_user_id,
+                    owner_username=owner_username, mode=mode
+                )
             if bot_state.is_deleted(token, token_label, (account_data or {}).get('account_id')):
                 print_warning(f"[DELETE] Token {token_label} deleted during login -> worker exit")
                 break
             if not account_data:
-                print_error("Login failed for Token. Retrying in 15 seconds...")
-                await asyncio.sleep(15)
+                fail_count += 1
+                delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
+                print_error(f"Login failed for Token. Retrying in {delay} seconds...")
+                await asyncio.sleep(delay + random.uniform(0, 3))
                 continue
+            fail_count = 0
             acc_id = str(account_data['account_id'])
-            await run_account_worker(account_data, acc_id, mode=mode)
+            await run_account_worker(account_data, acc_id, mode=mode, owner_user_id=owner_user_id)
             print_warning("Token session finished. Reconnecting in 3s...")
             await asyncio.sleep(3)
         except asyncio.CancelledError:
@@ -2340,7 +2493,8 @@ async def main():
     print_colored("=" * 60, Colors.CYAN)
     print_info(f"Start Match Interval: {START_MATCH_INTERVAL}s")
     print_info(f"Offline Wait: {NEW_MATCH_DELAY}s (after match found)")
-    print_info(f"EXP Refresh: {EXP_REFRESH_INTERVAL}s interval + post-match trigger")
+    print_info(f"EXP Refresh: {EXP_REFRESH_INTERVAL}s interval (auto-slower with many accounts) + post-match trigger")
+    print_info(f"Login queue: {LOGIN_CONCURRENCY} at a time | Refresh queue: {REFRESH_CONCURRENCY} at a time")
     print_info("Device System: 1 ID = 1 Persistent Device ID (devices.json)")
     print_colored("-" * 60, Colors.MAGENTA)
     print_info("MODE SWITCH:")
@@ -2349,11 +2503,21 @@ async def main():
     print_info("   * lw    -> Lone Wolf only")
     print_colored("=" * 60, Colors.CYAN)
 
+    main_task = asyncio.current_task()
+    try:
+        loop = asyncio.get_running_loop()
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(_sig, main_task.cancel)     # clean save on Render / Railway restarts
+    except Exception:
+        pass
+
     try:
         await start_web_dashboard(host=WEB_HOST, port=WEB_PORT)
         print_success(f"Web Dashboard live at port {WEB_PORT}")
     except Exception as e:
         print_error(f"Could not start web dashboard: {e}")
+
+    flusher_task = asyncio.create_task(token_cache_flusher())
 
     async def on_account_added_handler(data):
         mode = str(data.get("mode", "auto")).strip().lower()
@@ -2438,6 +2602,12 @@ async def main():
         for t in list(bot_state.account_workers.values()):
             t.cancel()
         await asyncio.gather(*bot_state.account_workers.values(), return_exceptions=True)
+        flusher_task.cancel()
+        try:
+            _flush_token_cache_sync()
+            await user_store.flush_now()
+        except Exception as e:
+            print_error(f"Final save failed: {e}")
         print_success("All sessions cleanly closed.")
 
 
