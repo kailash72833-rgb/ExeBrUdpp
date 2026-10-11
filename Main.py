@@ -15,6 +15,7 @@ import secrets
 import traceback
 import base64
 import signal
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -37,6 +38,13 @@ import CguFF_pb2
 import thunderFF_pb2
 
 from dashboard_server import bot_state, start_web_dashboard, user_store
+
+def token_key(token) -> str:
+    """Stable per-token identifier built from the WHOLE token (the old code used only the first
+    10/20 characters, so two tokens with the same beginning were treated as the same account:
+    deleting one stopped them all)."""
+    return "tok_" + hashlib.sha1(str(token).encode("utf-8")).hexdigest()[:20]
+
 
 # ==================== CONFIGURATION ====================
 WEB_HOST = "0.0.0.0"
@@ -508,7 +516,7 @@ def _update_cache_profile(account_data: Dict, level: int, exp: int):
         if auth_uid:
             keys.append(str(auth_uid))
         if auth_token:
-            keys.append(f"tok_{auth_token[:20]}")
+            keys.append(token_key(auth_token))
         if not keys:
             return
         cache = _load_token_cache()
@@ -1591,6 +1599,15 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
         except Exception as e:
             print_warning(f"[EXP-REFRESH] post-match refresh error: {e}")
 
+    async def cancel_play_matches():
+        """Stop every running match of this account (used by PAUSE, so EXP gain really stops)."""
+        live = [m for m in play_matches if not m.done()]
+        for m in live:
+            m.cancel()
+        if live:
+            await asyncio.gather(*live, return_exceptions=True)
+        play_matches.clear()
+
     try:
         while True:
             writer = None
@@ -1598,12 +1615,25 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
             try:
                 if bot_state.is_deleted(uid_str):
                     raise asyncio.CancelledError()
+                if bot_state.is_paused(uid_str):
+                    # paused: no gateway connection, no StartMatch, no running match
+                    await cancel_play_matches()
+                    print_warning(f"[PAUSE] UID {uid_str} paused. Waiting...")
+                    while bot_state.is_paused(uid_str):
+                        if bot_state.is_deleted(uid_str):
+                            raise asyncio.CancelledError()
+                        try:
+                            bot_state.update_status(uid_str, "PAUSED", 0)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(1.0)
+                    print_success(f"[RESUME] UID {uid_str} resumed.")
                 if current_account_data:
                     fresh = None
                     if current_account_data.get('auth_type') == 'guest' and current_account_data.get('auth_uid'):
                         fresh = cache_get(str(current_account_data['auth_uid']))
                     elif current_account_data.get('auth_type') == 'token' and current_account_data.get('auth_token'):
-                        fresh = cache_get(f"tok_{current_account_data['auth_token'][:20]}")
+                        fresh = cache_get(token_key(current_account_data['auth_token']))
                     if fresh:
                         current_account_data = fresh
                         current_key = fresh['aes_ak']
@@ -1626,7 +1656,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                             if current_account_data.get('auth_uid'):
                                 cache_invalidate(str(current_account_data['auth_uid']))
                             if current_account_data.get('auth_token'):
-                                cache_invalidate(f"tok_{current_account_data['auth_token'][:20]}")
+                                cache_invalidate(token_key(current_account_data['auth_token']))
                         except Exception:
                             pass
                         raise ConnectionError("Cache expired, triggering fresh login")
@@ -1699,7 +1729,8 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         print_error(f"start_game error: {e}")
                     last_start_time = asyncio.get_running_loop().time()
 
-                await send_start_match()
+                if not bot_state.is_paused(uid_str):
+                    await send_start_match()
 
                 while True:
                     if bot_state.is_deleted(uid_str):
@@ -1713,6 +1744,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         pass
 
                     if bot_state.is_paused(uid_str):
+                        await cancel_play_matches()      # a match that is already running is stopped too
                         try:
                             bot_state.update_status(uid_str, "PAUSED", 0)
                         except Exception:
@@ -1823,7 +1855,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                             if current_account_data.get('auth_uid'):
                                                 cache_invalidate(str(current_account_data['auth_uid']))
                                             if current_account_data.get('auth_token'):
-                                                cache_invalidate(f"tok_{current_account_data['auth_token'][:20]}")
+                                                cache_invalidate(token_key(current_account_data['auth_token']))
                                         except Exception:
                                             pass
                                     consecutive_parse_failures = 0
@@ -1843,7 +1875,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                         if current_account_data.get('auth_uid'):
                                             cache_invalidate(str(current_account_data['auth_uid']))
                                         if current_account_data.get('auth_token'):
-                                            cache_invalidate(f"tok_{current_account_data['auth_token'][:20]}")
+                                            cache_invalidate(token_key(current_account_data['auth_token']))
                                     except Exception:
                                         pass
                                 consecutive_parse_failures = 0
@@ -1984,7 +2016,7 @@ def _register_credentials(account_data: Dict):
         if account_data.get('auth_uid'):
             bot_state.account_credentials[str(account_data['auth_uid'])] = account_data
         if account_data.get('auth_token'):
-            bot_state.account_credentials[f"tok_{account_data['auth_token'][:20]}"] = account_data
+            bot_state.account_credentials[token_key(account_data['auth_token'])] = account_data
     except Exception:
         pass
 
@@ -2158,7 +2190,7 @@ async def process_account_uid_pass(uid: str, password: str,
 async def process_account_token(access_token: str,
                                  owner_user_id: str = "", owner_username: str = "",
                                  mode: str = "auto") -> Optional[Dict]:
-    cache_key = f"tok_{access_token[:20]}"
+    cache_key = token_key(access_token)
     cached = cache_get(cache_key)
     if cached:
         print_success(f"[CACHE HIT] Token {access_token[:10]}... loaded from cache")
@@ -2256,7 +2288,7 @@ def _mode_label(mode: str, level: int) -> str:
 
 def _worker_ids(account_data: Dict) -> List[str]:
     tok = account_data.get('auth_token') or ''
-    return [str(x) for x in (account_data.get('account_id'), account_data.get('auth_uid'), tok, tok[:10]) if x]
+    return [str(x) for x in (account_data.get('account_id'), account_data.get('auth_uid'), tok, token_key(tok) if tok else '') if x]
 
 
 async def _wait_until_allowed(owner_id: str, *ids) -> bool:
@@ -2429,7 +2461,7 @@ async def account_loop_guest(uid: str, password: str, mode: str = "auto",
 
 async def account_loop_token(token: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
-    token_label = token[:10]
+    token_label = token_key(token)
     fail_count = 0
     await asyncio.sleep(random.uniform(0, 2.0))
     while True:
@@ -2535,7 +2567,7 @@ async def main():
 
         if "token" in data and data["token"]:
             t = str(data["token"]).strip()
-            await _replace_worker(t[:10], account_loop_token(
+            await _replace_worker(token_key(t), account_loop_token(
                 t, mode=mode, owner_user_id=owner_id, owner_username=owner_name
             ))
         elif "uid" in data and "password" in data:
@@ -2586,7 +2618,7 @@ async def main():
             t = asyncio.create_task(account_loop_token(
                 acc["token"], mode=mode, owner_user_id=owner_id, owner_username=owner_name
             ))
-            bot_state.account_workers[acc["token"][:10]] = t
+            bot_state.account_workers[token_key(acc["token"])] = t
         elif "uid" in acc and "password" in acc and acc["uid"]:
             u = str(acc["uid"])
             t = asyncio.create_task(account_loop_guest(
