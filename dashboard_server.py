@@ -31,6 +31,7 @@ ADMIN_TOKEN_TTL = 7 * 24 * 3600
 USER_TOKEN_TTL = 30 * 24 * 3600
 FREE_PLAN_HOURS = 12
 FREE_PLAN_SLOTS = 3
+NEW_USER_SLOTS = 0   # brand-new users get 0 slots until they claim the free plan or buy a plan
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "index.html")
@@ -295,7 +296,7 @@ class UserStore:
             "password_hash": _hash_pw(password),
             "role": "user",
             "plan": "Free",
-            "slots": FREE_PLAN_SLOTS,
+            "slots": NEW_USER_SLOTS,
             "plan_expires_at": 0,
             "free_plan_claimed": False,
             "created_at": int(time.time()),
@@ -408,6 +409,29 @@ def _json(data, status: int = 200):
     return web.json_response(data, status=status)
 
 
+def _has_plan(u: Optional[Dict]) -> bool:
+    """True once a user has ever had a plan: a paid/approved plan, a claimed free trial,
+    or slots set by hand from the admin panel. False for a brand-new user."""
+    if not u:
+        return False
+    return bool(
+        u.get("plan_expires_at", 0)
+        or u.get("free_plan_claimed")
+        or u.get("slots_manual")
+        or str(u.get("plan", "Free")) not in ("", "Free")
+    )
+
+
+def _slot_limit(u: Optional[Dict]) -> int:
+    """Total slots a user really has: 0 for a new user, otherwise the actual stored slots."""
+    if not _has_plan(u):
+        return 0
+    try:
+        return max(0, int(u.get("slots", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _public_user(u: Dict) -> Dict:
     return {
         "id": u["id"],
@@ -416,7 +440,7 @@ def _public_user(u: Dict) -> Dict:
         "display_name": u.get("display_name", u["username"]),
         "role": u.get("role", "user"),
         "plan": u.get("plan", "Free"),
-        "slots": u.get("slots", FREE_PLAN_SLOTS),
+        "slots": _slot_limit(u),
         "plan_expires_at": u.get("plan_expires_at", 0),
         "free_plan_claimed": u.get("free_plan_claimed", False),
     }
@@ -497,7 +521,7 @@ async def handle_get_stats(request: web.Request):
     accounts_data.sort(key=lambda x: x.get("gained_exp", 0), reverse=True)
 
     plan_name = "Admin" if is_admin else (user.get("plan", "Free") if user else "Free")
-    user_slots = 9999 if is_admin else (user.get("slots", FREE_PLAN_SLOTS) if user else 0)
+    user_slots = 9999 if is_admin else _slot_limit(user)
     used_slots = len(accounts_data)
     available_slots = max(0, user_slots - used_slots)
 
@@ -865,7 +889,7 @@ async def handle_account_add(request: web.Request):
 
         if not is_admin:
             visible = [a for a in bot_state.accounts.values() if a.get("owner_user_id") == user["id"]]
-            if len(visible) >= user.get("slots", FREE_PLAN_SLOTS):
+            if len(visible) >= _slot_limit(user):
                 return _json({"status": "error", "error": "No slots left. Buy a plan."})
 
         owner_id = user["id"] if user else "admin"
@@ -1144,7 +1168,7 @@ async def handle_admin_users(request: web.Request):
             "role": u.get("role", "user"),
             "plan": u.get("plan", "Free"),
             "plan_expires_at": u.get("plan_expires_at", 0),
-            "slots": u.get("slots", FREE_PLAN_SLOTS),
+            "slots": _slot_limit(u),
             "slots_used": len(owned),
             "free_plan_claimed": u.get("free_plan_claimed", False),
             "total_gained_exp": sum(a.get("gained_exp", 0) for a in owned),
@@ -1168,7 +1192,9 @@ async def handle_admin_users_update(request: web.Request):
 
         fields = {}
         if slots is not None:
-            try: fields["slots"] = int(slots)
+            try:
+                fields["slots"] = int(slots)
+                fields["slots_manual"] = True   # admin set this on purpose, so it counts even without a plan
             except: pass
         if add_hours:
             now = int(time.time())
