@@ -3,6 +3,8 @@
 EXE LEVEL UP - FreeFire Bot Web Dashboard Backend (Full)
 Supports: user auth, plans, orders, admin panel, free plan requests,
           bulk account add, pause/restart, credentials download.
+Hardened: signed payment webhook, rate limits, plan-expiry enforcement,
+          slot limits on every add path, non-blocking storage.
 Embedded Async Web Server (aiohttp)
 """
 
@@ -13,10 +15,12 @@ import hmac
 import io
 import json
 import os
+import re
 import secrets
 import time
 import uuid
 import zipfile
+from collections import deque
 from typing import Dict, List, Any, Optional
 from aiohttp import web
 try:
@@ -32,6 +36,14 @@ USER_TOKEN_TTL = 30 * 24 * 3600
 FREE_PLAN_HOURS = 12
 FREE_PLAN_SLOTS = 3
 NEW_USER_SLOTS = 0   # brand-new users get 0 slots until they claim the free plan or buy a plan
+MAX_ACCOUNTS_PER_REQUEST = 500
+PLAN_ENFORCE_INTERVAL = 10          # seconds between plan-expiry / slot checks
+MAX_USERS_PER_IP_PER_DAY = 3        # signups from one IP per 24h (stops free-trial farming)
+
+# Telegram links shown in the panel
+TG_CHANNEL_1 = "https://t.me/BrExeee"
+TG_CHANNEL_2 = "https://t.me/Exeprooff"
+TG_SUPPORT = "https://t.me/Brexxee"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_PATH = os.path.join(BASE_DIR, "templates", "index.html")
@@ -43,20 +55,105 @@ ACCOUNTS_FILE = os.path.join(BASE_DIR, "accounts.json")
 DEVICES_FILE = os.path.join(BASE_DIR, "devices.json")
 TOKEN_CACHE_FILE = os.path.join(BASE_DIR, "token_cache.json")
 PLANS_FILE = os.path.join(BASE_DIR, "plans.json")
+PLANS_VERSION_FILE = os.path.join(BASE_DIR, "plans.version")
 
-
+# Plans: 1 / 3 / 10 / 20 days. Prices and slots are unchanged from the old plans.
+PLANS_VERSION = "days-1-3-10-20-v1"
 DEFAULT_PLANS = [
-    {"id": "basic-7",  "name": "Basic",  "duration_text": "7 Days",  "duration_hours": 168,  "price_inr": 99,   "price_usd": 1.29,  "slots": 5,   "badge": None,         "popular": False},
-    {"id": "pro-30",   "name": "Pro",    "duration_text": "30 Days", "duration_hours": 720,  "price_inr": 299,  "price_usd": 3.99,  "slots": 15,  "badge": "POPULAR",    "popular": True},
-    {"id": "ultra-30", "name": "Ultra",  "duration_text": "30 Days", "duration_hours": 720,  "price_inr": 599,  "price_usd": 7.99,  "slots": 40,  "badge": "BEST VALUE", "popular": False},
-    {"id": "mega-90",  "name": "Mega",   "duration_text": "90 Days", "duration_hours": 2160, "price_inr": 1499, "price_usd": 19.99, "slots": 100, "badge": None,         "popular": False},
+    {"id": "basic-1",  "name": "Basic", "duration_text": "1 Day",   "duration_hours": 24,  "price_inr": 99,   "price_usd": 1.29,  "slots": 5,   "badge": None,         "popular": False},
+    {"id": "pro-3",    "name": "Pro",   "duration_text": "3 Days",  "duration_hours": 72,  "price_inr": 299,  "price_usd": 3.99,  "slots": 15,  "badge": "POPULAR",    "popular": True},
+    {"id": "ultra-10", "name": "Ultra", "duration_text": "10 Days", "duration_hours": 240, "price_inr": 599,  "price_usd": 7.99,  "slots": 40,  "badge": "BEST VALUE", "popular": False},
+    {"id": "mega-20",  "name": "Mega",  "duration_text": "20 Days", "duration_hours": 480, "price_inr": 1499, "price_usd": 19.99, "slots": 100, "badge": None,         "popular": False},
 ]
 
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", ADMIN_PASSWORD_DEFAULT)
+# ---- admin password: the old public default is NOT accepted any more.
+_env_admin_pw = (os.environ.get("ADMIN_PASSWORD") or "").strip()
+ADMIN_PASSWORD_GENERATED = False
+if (not _env_admin_pw) or _env_admin_pw == ADMIN_PASSWORD_DEFAULT or len(_env_admin_pw) < 8:
+    ADMIN_PASSWORD = secrets.token_urlsafe(12)
+    ADMIN_PASSWORD_GENERATED = True
+else:
+    ADMIN_PASSWORD = _env_admin_pw
+
 # Keep the payment key server-only. Railway currently provides it as `Key`.
 ZAPUPI_API_KEY = (os.environ.get("Key") or os.environ.get("ZAPUPI_API_KEY", "")).strip()
 ZAPUPI_CREATE_ORDER_URL = os.environ.get("ZAPUPI_CREATE_ORDER_URL", "https://pay.zapupi.com/api/create-order")
 ZAPUPI_WEBHOOK_URL = os.environ.get("ZAPUPI_WEBHOOK_URL", "")
+APP_URL = (os.environ.get("APP_URL") or "https://nxc-bot-production.up.railway.app").strip().rstrip("/")
+
+# Secret used to sign the per-order webhook URL (an attacker cannot forge "payment success").
+_WEBHOOK_SECRET = (os.environ.get("WEBHOOK_SECRET") or ZAPUPI_API_KEY or secrets.token_hex(32)).encode("utf-8")
+# How many reverse proxies sit in front of the app (Railway/Render = 1).
+TRUSTED_PROXY_HOPS = max(1, int(os.environ.get("TRUSTED_PROXY_HOPS", "1") or 1))
+
+
+def _webhook_sig(order_id: str) -> str:
+    return hmac.new(_WEBHOOK_SECRET, ("zapupi|" + str(order_id)).encode("utf-8"), hashlib.sha256).hexdigest()[:40]
+
+
+# ==================== RATE LIMITER ====================
+class RateLimiter:
+    def __init__(self):
+        self.hits: Dict[str, deque] = {}
+
+    def allow(self, key: str, limit: int, window: float) -> bool:
+        now = time.time()
+        q = self.hits.get(key)
+        if q is None:
+            q = self.hits[key] = deque()
+        while q and q[0] <= now - window:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        return True
+
+    def cleanup(self, max_age: float = 86400):
+        now = time.time()
+        for k in list(self.hits):
+            q = self.hits[k]
+            while q and q[0] <= now - max_age:
+                q.popleft()
+            if not q:
+                self.hits.pop(k, None)
+
+
+rate_limiter = RateLimiter()
+
+
+def _client_ip(request: web.Request) -> str:
+    xff = request.headers.get("X-Forwarded-For", "")
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    if parts:
+        idx = len(parts) - TRUSTED_PROXY_HOPS
+        return parts[idx if idx >= 0 else 0]
+    return request.remote or "?"
+
+
+def _limited(request: web.Request, bucket: str, limit: int, window: float, who: str = "") -> bool:
+    """True when the caller is over the limit."""
+    key = f"{bucket}|{who or _client_ip(request)}"
+    return not rate_limiter.allow(key, limit, window)
+
+
+def _too_many():
+    return _json({"status": "error", "error": "Too many attempts. Please wait a few minutes and try again."}, 429)
+
+
+def _norm_email(email: str) -> str:
+    """Gmail ignores dots and +tags, so a.b+1@gmail.com == ab@gmail.com (stops duplicate free trials)."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return email
+    local, domain = email.split("@", 1)
+    if domain in ("gmail.com", "googlemail.com"):
+        local = local.split("+", 1)[0].replace(".", "")
+        domain = "gmail.com"
+    return f"{local}@{domain}"
+
+
+def _norm_tg(tg: str) -> str:
+    return re.sub(r"[^a-z0-9_]", "", (tg or "").lower().replace("https://t.me/", ""))
 
 
 # ==================== STORAGE ====================
@@ -75,6 +172,16 @@ def _save_json(path: str, data):
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"[STORAGE] save failed {path}: {e}")
+
+
+def _write_text_atomic(path: str, text: str):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
         os.replace(tmp, path)
     except Exception as e:
         print(f"[STORAGE] save failed {path}: {e}")
@@ -114,6 +221,17 @@ class BotState:
         # (game account id, guest login uid, access token, token prefixes) so that any
         # in-flight login or worker loop can detect the deletion and stop for good.
         self._deleted_groups: List[set] = []
+        # Plan enforcement (filled by plan_enforcer): owners whose plan is over/missing and
+        # individual account identifiers that are above their owner's slot limit.
+        self.blocked_owners: set = set()
+        self.blocked_ids: set = set()
+
+    def is_blocked(self, owner_id, *identifiers) -> bool:
+        owner = str(owner_id or "")
+        if owner and owner != "admin" and owner in self.blocked_owners:
+            return True
+        ids = {str(i) for i in identifiers if i not in (None, "")}
+        return bool(ids & self.blocked_ids)
 
     def is_deleted(self, *identifiers) -> bool:
         ids = {str(i) for i in identifiers if i not in (None, "")}
@@ -158,6 +276,7 @@ class BotState:
                 "last_match_time": None,
                 "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "last_updated_at": int(time.time()),
+                "registered_at": time.time(),
                 "owner_user_id": owner_user_id,
                 "owner_username": owner_username,
             }
@@ -230,6 +349,10 @@ class UserStore:
         self.mongo = None
         self.user_collection = None
         self.token_collection = None
+        self._dirty = False
+        self._flush_lock: Optional[asyncio.Lock] = None
+        self._last_users: Dict[str, str] = {}
+        self._last_tokens: Dict[str, str] = {}
         mongo_url = (os.environ.get("MONGODB_CONNECTION_STRING_2") or os.environ.get("MONGODB_CONNECTION_STRING", "")).strip()
         if mongo_url and MongoClient:
             try:
@@ -251,20 +374,63 @@ class UserStore:
         if self.user_collection is not None:
             self.users = {u["username"]: u for u in self.user_collection.find({}, {"_id": 0})}
             self.tokens = {s["token"]: s for s in self.token_collection.find({}, {"_id": 0})}
+            self._last_users = {k: json.dumps(v, sort_keys=True, default=str) for k, v in self.users.items()}
+            self._last_tokens = {k: json.dumps(dict(v, token=k), sort_keys=True, default=str) for k, v in self.tokens.items()}
         self._cleanup_tokens()
 
+    # ---- persistence: callers only mark the store dirty; a background task writes it
+    #      off the event loop and only sends CHANGED users to MongoDB.
     def _persist(self):
-        _save_json(USERS_FILE, self.users)
-        _save_json(USERS_FILE + ".tokens", self.tokens)
-        if self.user_collection is not None:
-            for username, record in self.users.items():
-                self.user_collection.replace_one({"username": username}, record, upsert=True)
-            stored_usernames = set(self.users)
-            self.user_collection.delete_many({"username": {"$nin": list(stored_usernames)}} if stored_usernames else {})
-            for session_token, session in self.tokens.items():
-                self.token_collection.replace_one({"token": session_token}, dict(session, token=session_token), upsert=True)
-            stored_tokens = set(self.tokens)
-            self.token_collection.delete_many({"token": {"$nin": list(stored_tokens)}} if stored_tokens else {})
+        self._dirty = True
+
+    def _write_snapshot(self, users_json: str, tokens_json: str, user_strs: Dict[str, str], token_strs: Dict[str, str]):
+        _write_text_atomic(USERS_FILE, users_json)
+        _write_text_atomic(USERS_FILE + ".tokens", tokens_json)
+        if self.user_collection is None:
+            return
+        try:
+            for name, text in user_strs.items():
+                if self._last_users.get(name) != text:
+                    self.user_collection.replace_one({"username": name}, json.loads(text), upsert=True)
+            gone = [n for n in self._last_users if n not in user_strs]
+            if gone:
+                self.user_collection.delete_many({"username": {"$in": gone}})
+            for tok, text in token_strs.items():
+                if self._last_tokens.get(tok) != text:
+                    self.token_collection.replace_one({"token": tok}, json.loads(text), upsert=True)
+            gone_t = [t for t in self._last_tokens if t not in token_strs]
+            if gone_t:
+                self.token_collection.delete_many({"token": {"$in": gone_t}})
+            self._last_users = user_strs
+            self._last_tokens = token_strs
+        except Exception as exc:
+            print(f"[STORAGE] Mongo write failed (will retry): {exc}")
+            self._dirty = True
+
+    async def flush_now(self):
+        if self._flush_lock is None:
+            self._flush_lock = asyncio.Lock()
+        async with self._flush_lock:
+            if not self._dirty:
+                return
+            self._dirty = False
+            try:
+                user_strs = {k: json.dumps(v, sort_keys=True, default=str) for k, v in self.users.items()}
+                token_strs = {k: json.dumps(dict(v, token=k), sort_keys=True, default=str) for k, v in self.tokens.items()}
+                users_json = json.dumps(self.users, indent=2, default=str)
+                tokens_json = json.dumps(self.tokens, indent=2, default=str)
+                await asyncio.to_thread(self._write_snapshot, users_json, tokens_json, user_strs, token_strs)
+            except Exception as exc:
+                self._dirty = True
+                print(f"[STORAGE] flush failed: {exc}")
+
+    async def flusher(self):
+        while True:
+            await asyncio.sleep(1.5)
+            try:
+                await self.flush_now()
+            except Exception as exc:
+                print(f"[STORAGE] flusher error: {exc}")
 
     def _cleanup_tokens(self):
         now = time.time()
@@ -281,19 +447,21 @@ class UserStore:
             return user
         return next((item for item in self.users.values() if item.get("email", "").lower() == value), None)
 
-    def create(self, username: str, email: str, password: str, display_name: str) -> Optional[Dict]:
+    def create(self, username: str, email: str, password_hash: str, display_name: str, reg_ip: str = "") -> Optional[Dict]:
         u = username.strip().lower()
         if not u or len(u) < 3:
             return None
         email = email.strip().lower()
-        if u in self.users or any(item.get("email", "").lower() == email for item in self.users.values()):
+        norm = _norm_email(email)
+        if u in self.users or any(_norm_email(item.get("email", "")) == norm for item in self.users.values()):
             return None
         user = {
             "id": str(uuid.uuid4()),
             "username": u,
             "email": email,
             "display_name": display_name.strip() or u,
-            "password_hash": _hash_pw(password),
+            "password_hash": password_hash,
+            "reg_ip": reg_ip,
             "role": "user",
             "plan": "Free",
             "slots": NEW_USER_SLOTS,
@@ -316,7 +484,12 @@ class UserStore:
 
     def issue_token(self, username: str) -> str:
         tok = secrets.token_urlsafe(32)
-        self.tokens[tok] = {"username": username.lower(), "expires": int(time.time()) + USER_TOKEN_TTL}
+        uname = username.lower()
+        self.tokens[tok] = {"username": uname, "expires": int(time.time()) + USER_TOKEN_TTL}
+        mine = sorted((t for t, v in self.tokens.items() if v.get("username") == uname),
+                      key=lambda t: self.tokens[t].get("expires", 0))
+        for old in mine[:-8]:          # keep the 8 newest sessions per user
+            self.tokens.pop(old, None)
         self._persist()
         return tok
 
@@ -364,11 +537,14 @@ user_store = UserStore()
 
 # ==================== PLANS ====================
 def load_plans() -> List[Dict]:
+    """plans.json from an older release is replaced once (version marker); later hand edits are kept."""
     plans = _load_json(PLANS_FILE, None)
-    if not plans or not isinstance(plans, list):
-        _save_json(PLANS_FILE, DEFAULT_PLANS)
-        return DEFAULT_PLANS
-    return plans
+    version = _load_json(PLANS_VERSION_FILE, None)
+    if plans and isinstance(plans, list) and version == PLANS_VERSION:
+        return plans
+    _save_json(PLANS_FILE, DEFAULT_PLANS)
+    _save_json(PLANS_VERSION_FILE, PLANS_VERSION)
+    return DEFAULT_PLANS
 
 
 # ==================== ADMIN SESSIONS ====================
@@ -432,6 +608,63 @@ def _slot_limit(u: Optional[Dict]) -> int:
         return 0
 
 
+def _plan_active(u: Optional[Dict]) -> bool:
+    """True only while the user has a running plan (or slots granted by hand by the admin)."""
+    if not u:
+        return False
+    try:
+        exp = int(u.get("plan_expires_at", 0) or 0)
+    except (TypeError, ValueError):
+        exp = 0
+    if exp > 0:
+        return exp > time.time()
+    return bool(u.get("slots_manual")) and _slot_limit(u) > 0
+
+
+def _recompute_blocks():
+    """Work out which owners / accounts must NOT run right now (expired plan, deleted user,
+    or more accounts than the plan has slots). The bot workers read bot_state.blocked_*."""
+    users = {u["id"]: u for u in user_store.all_users()}
+    blocked_owners = {uid_ for uid_, u in users.items() if not _plan_active(u)}
+    entries = _read_accounts()
+    per_owner: Dict[str, List[Dict]] = {}
+    for e in entries:
+        oid = str(e.get("owner_user_id", "") or "")
+        if not oid or oid == "admin":
+            continue
+        if oid not in users:
+            blocked_owners.add(oid)
+            continue
+        per_owner.setdefault(oid, []).append(e)
+    blocked_ids: set = set()
+    for oid, items in per_owner.items():
+        if oid in blocked_owners:
+            continue
+        limit = _slot_limit(users[oid])
+        for e in items[limit:]:
+            blocked_ids |= _collect_identities(str(e.get("uid", "") or ""), str(e.get("token", "") or ""), entries)
+    bot_state.blocked_owners = blocked_owners
+    bot_state.blocked_ids = blocked_ids
+    for game_uid, acc in list(bot_state.accounts.items()):
+        if bot_state.is_blocked(acc.get("owner_user_id"), game_uid):
+            if acc.get("status") not in ("EXPIRED",):
+                bot_state.update_status(game_uid, "EXPIRED", 0)
+
+
+async def plan_enforcer():
+    """Every few seconds: stop expired / over-limit accounts, resume renewed ones."""
+    tick = 0
+    while True:
+        try:
+            _recompute_blocks()
+            tick += 1
+            if tick % 30 == 0:
+                rate_limiter.cleanup()
+        except Exception as e:
+            print(f"[ENFORCER] error: {e}")
+        await asyncio.sleep(PLAN_ENFORCE_INTERVAL)
+
+
 def _public_user(u: Dict) -> Dict:
     return {
         "id": u["id"],
@@ -449,42 +682,59 @@ def _public_user(u: Dict) -> Dict:
 # ==================== USER HANDLERS ====================
 async def handle_user_register(request: web.Request):
     try:
+        if _limited(request, "register", 10, 3600):
+            return _too_many()
         data = await request.json()
         username = str(data.get("username", "")).strip().lower()
         email = str(data.get("email", "")).strip().lower()
         password = str(data.get("password", ""))
-        display_name = str(data.get("display_name", "")).strip()
-        if len(username) < 3 or not username.replace("_", "").isalnum():
-            return _json({"status": "error", "error": "Username must be 3+ letters, numbers, or underscore"})
-        if not email.endswith("@gmail.com"):
+        display_name = str(data.get("display_name", "")).strip()[:40]
+        if len(username) < 3 or len(username) > 32 or not username.replace("_", "").isalnum():
+            return _json({"status": "error", "error": "Username must be 3-32 letters, numbers, or underscore"})
+        if not email.endswith("@gmail.com") or len(email) > 120:
             return _json({"status": "error", "error": "Use a valid Gmail address"})
         if len(password) < 8:
             return _json({"status": "error", "error": "Password must be at least 8 chars"})
+        if len(password) > 128:
+            return _json({"status": "error", "error": "Password too long"})
         if user_store.find(username) or user_store.find(email):
             return _json({"status": "error", "error": "Username or Gmail already registered"})
-        user = user_store.create(username, email, password, display_name)
+        ip = _client_ip(request)
+        recent = sum(1 for u in user_store.all_users()
+                     if u.get("reg_ip") == ip and time.time() - int(u.get("created_at", 0) or 0) < 86400)
+        if recent >= MAX_USERS_PER_IP_PER_DAY:
+            return _json({"status": "error", "error": "Too many accounts created from this network today. Try again tomorrow."}, 429)
+        pw_hash = await asyncio.to_thread(_hash_pw, password)      # slow hash off the event loop
+        user = user_store.create(username, email, pw_hash, display_name, reg_ip=ip)
         if not user:
-            return _json({"status": "error", "error": "Could not create user"})
+            return _json({"status": "error", "error": "Username or Gmail already registered"})
         token = user_store.issue_token(username)
         bot_state.log(f"New user registered: {username}", "success")
         return _json({"status": "ok", "token": token, "user": _public_user(user)})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Could not create user"})
 
 
 async def handle_user_login(request: web.Request):
     try:
+        if _limited(request, "login-ip", 30, 300):
+            return _too_many()
         data = await request.json()
         identity = str(data.get("identity", data.get("username", ""))).strip().lower()
         password = str(data.get("password", ""))
-        user = user_store.verify(identity, password)
+        if len(identity) > 120 or len(password) > 128:
+            return _json({"status": "error", "error": "Invalid Gmail/username or password"})
+        # per (network + account): an outsider cannot lock the real owner out of his own account
+        if _limited(request, "login-id", 8, 300, who=f"{_client_ip(request)}|{identity}"):
+            return _too_many()
+        user = await asyncio.to_thread(user_store.verify, identity, password)   # slow hash off the event loop
         if not user:
             return _json({"status": "error", "error": "Invalid Gmail/username or password"})
         user_store.update(user["username"], last_login=int(time.time()))
         token = user_store.issue_token(user["username"])
         return _json({"status": "ok", "token": token, "user": _public_user(user)})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Login failed"})
 
 
 async def handle_user_logout(request: web.Request):
@@ -517,6 +767,9 @@ async def handle_get_stats(request: web.Request):
     for acc in visible_accounts:
         item = dict(acc)
         item["is_paused"] = bot_state.is_paused(item.get("uid", ""))
+        item["is_blocked"] = bool(bot_state.is_blocked(item.get("owner_user_id"), item.get("uid", "")))
+        if item["is_blocked"]:
+            item["status"] = "EXPIRED"
         accounts_data.append(item)
     accounts_data.sort(key=lambda x: x.get("gained_exp", 0), reverse=True)
 
@@ -541,8 +794,11 @@ async def handle_get_stats(request: web.Request):
     if is_admin:
         logs = bot_state.logs[-60:]
     else:
-        owned_uids = {str(a.get("uid")) for a in accounts_data}
-        logs = [l for l in bot_state.logs if not l.get("uid") or str(l.get("uid")) in owned_uids][-60:]
+        # users only see log lines that belong to their own accounts (no other users' names / orders)
+        owned_uids = {str(a.get("uid")) for a in accounts_data if a.get("uid")}
+        logs = [l for l in list(bot_state.logs)
+                if (l.get("uid") and str(l.get("uid")) in owned_uids)
+                or (owned_uids and any(u in str(l.get("message", "")) for u in owned_uids))][-60:]
 
     return _json({
         "status": "ok",
@@ -562,10 +818,19 @@ async def handle_get_stats(request: web.Request):
 
 # ==================== PLANS HANDLERS ====================
 def _activate_paid_order(order: Dict, gateway_data: Dict):
+    """Give the user the plan. Safe to call twice: an order is only ever activated once."""
+    if order.get("activated_at"):
+        return False
     username = str(order.get("username", "")).strip()
     plan_id = str(order.get("plan_id", "")).strip()
     plan = next((p for p in load_plans() if str(p.get("id")) == plan_id), None)
-    if not username or not plan:
+    if plan:
+        slots, hours, name = int(plan["slots"]), int(plan["duration_hours"]), plan["name"]
+    elif order.get("slots") and order.get("duration_hours"):      # order made under an older plan list
+        slots, hours, name = int(order["slots"]), int(order["duration_hours"]), str(order.get("plan_name", "Plan"))
+    else:
+        return False
+    if not username:
         return False
     user = user_store.find(username)
     if not user:
@@ -575,38 +840,103 @@ def _activate_paid_order(order: Dict, gateway_data: Dict):
     start_at = max(now, current_expiry)
     user_store.update(
         username,
-        plan=plan["name"],
-        slots=int(plan["slots"]),
-        plan_expires_at=start_at + int(plan["duration_hours"]) * 3600,
+        plan=name,
+        slots=slots,
+        plan_expires_at=start_at + hours * 3600,
         last_payment_order_id=order.get("id"),
-        last_payment_txn_id=gateway_data.get("txn_id") or gateway_data.get("transaction_id") or "",
+        last_payment_txn_id=(gateway_data or {}).get("txn_id") or (gateway_data or {}).get("transaction_id") or "",
     )
     order["activated_at"] = now
+    _recompute_blocks()
     return True
 
 
-async def handle_zapupi_webhook(request: web.Request):
+_GATEWAY_OK = {"success", "successful", "paid", "completed"}
+_GATEWAY_BAD = {"failed", "failure", "cancelled", "canceled", "expired"}
+ZAPUPI_STATUS_URL = os.environ.get("ZAPUPI_STATUS_URL", "").strip()   # optional: lets us double-check legacy callbacks
+
+
+async def _gateway_confirms_paid(order_id: str) -> bool:
+    """Ask the gateway directly (only if ZAPUPI_STATUS_URL is configured)."""
+    if not ZAPUPI_STATUS_URL or not ZAPUPI_API_KEY:
+        return False
     try:
-        data = await request.json()
-        order_id = str(data.get("order_id", "")).strip()
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(ZAPUPI_STATUS_URL, json={"zap_key": ZAPUPI_API_KEY, "order_id": order_id}) as resp:
+                info = await resp.json(content_type=None)
+        if not isinstance(info, dict):
+            return False
+        inner = info.get("data") if isinstance(info.get("data"), dict) else info
+        status = str(inner.get("status", "")).strip().lower()
+        return status in _GATEWAY_OK
+    except Exception:
+        return False
+
+
+async def handle_zapupi_webhook(request: web.Request):
+    """Payment callback. Only a callback whose URL carries the right signature (created by us
+    together with the order) can activate a plan; a plain call to the old URL can only be
+    activated after the gateway itself confirms the payment, otherwise it waits for admin approval."""
+    try:
+        order_id = str(request.match_info.get("order_id", "")).strip()
+        sig = str(request.match_info.get("sig", "")).strip()
+        try:
+            data = await request.json()
+        except Exception:
+            try:
+                data = dict(await request.post())
+            except Exception:
+                data = {}
+        if not isinstance(data, dict):
+            data = {}
+        body_order = str(data.get("order_id", "")).strip()
+        signed = bool(order_id and sig and hmac.compare_digest(sig, _webhook_sig(order_id)))
+        if not order_id:
+            order_id = body_order            # legacy URL
+        elif body_order and body_order != order_id:
+            return _json({"status": "ok"})
+        if (order_id and sig) and not signed:
+            return _json({"status": "error", "error": "bad signature"}, 403)
         if not order_id:
             return _json({"status": "ok"})
+
         orders = _load_json(ORDERS_FILE, [])
-        for order in orders:
-            if order.get("id") == order_id:
-                gateway_status = str(data.get("status", "")).strip().lower()
-                order["gateway_status"] = data.get("status", "")
-                order["txn_id"] = data.get("txn_id") or data.get("transaction_id") or ""
-                order["utr"] = data.get("utr", "")
-                if gateway_status in {"success", "successful", "paid", "completed"}:
+        order = next((o for o in orders if o.get("id") == order_id), None)
+        if not order or order.get("status") in ("paid", "approved"):
+            return _json({"status": "ok"})          # unknown order, or already handled (replay)
+
+        gateway_status = str(data.get("status", "")).strip().lower()
+        order["gateway_status"] = data.get("status", "")
+        order["txn_id"] = data.get("txn_id") or data.get("transaction_id") or ""
+        order["utr"] = data.get("utr", "")
+        if gateway_status in _GATEWAY_OK:
+            if not signed and not await _gateway_confirms_paid(order_id):
+                order["status"] = "pending"
+                order["note"] = "payment callback not verified - approve manually after checking your bank"
+                bot_state.log(f"Unverified payment callback for {order_id} -> waiting for admin approval", "warning")
+            else:
+                try:
+                    paid_amount = float(data.get("amount")) if data.get("amount") not in (None, "") else None
+                except (TypeError, ValueError):
+                    paid_amount = None
+                if paid_amount is not None and paid_amount + 0.5 < float(order.get("price_inr", 0) or 0):
+                    order["status"] = "pending"
+                    order["note"] = f"amount mismatch (paid {paid_amount}, price {order.get('price_inr')})"
+                    bot_state.log(f"Order {order_id}: amount mismatch, not activated", "warning")
+                elif _activate_paid_order(order, data):
                     order["status"] = "paid"
-                    _activate_paid_order(order, data)
-                elif gateway_status in {"failed", "failure", "cancelled", "canceled", "expired"}:
-                    order["status"] = "failed"
-                break
+                    bot_state.log(f"Payment received: {order.get('username')} -> {order.get('plan_name')}", "success")
+                else:
+                    order["status"] = "pending"
+                    order["note"] = "paid but could not activate - approve manually"
+        elif gateway_status in _GATEWAY_BAD:
+            order["status"] = "failed"
         _save_json(ORDERS_FILE, orders)
+        await user_store.flush_now()
         return _json({"status": "ok"})
-    except Exception:
+    except Exception as e:
+        print(f"[WEBHOOK] error: {e}")
         return _json({"status": "ok"})
 
 
@@ -620,26 +950,27 @@ async def handle_zapupi_order(request: web.Request):
         return _json({"status": "error", "error": "Not authenticated"}, 401)
     if not ZAPUPI_API_KEY:
         return _json({"status": "error", "error": "UPI gateway is not configured"}, 503)
+    if _limited(request, "order", 10, 3600, who=user["id"]):
+        return _too_many()
     try:
         data = await request.json()
         plan = next((p for p in load_plans() if p.get("id") == str(data.get("plan_id", ""))), None)
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"}, 400)
         order_id = "EXE" + secrets.token_hex(8).upper()
-        app_url = "https://nxc-bot-production.up.railway.app"
         payload = {
             "zap_key": ZAPUPI_API_KEY,
             "order_id": order_id,
-            "amount": float(plan["price_inr"]),
-            "customer_mobile": str(data.get("customer_mobile", "")).strip(),
+            "amount": float(plan["price_inr"]),          # price always comes from the server, never the client
+            "customer_mobile": re.sub(r"[^0-9+]", "", str(data.get("customer_mobile", "")))[:15],
             "remark": f"{plan['name']} | {user['username']}",
-            "success_url": str(data.get("success_url") or f"{app_url}/#home").strip(),
-            "failed_url": str(data.get("failed_url") or f"{app_url}/#home").strip(),
-            "timeout_url": str(data.get("timeout_url") or f"{app_url}/#home").strip(),
+            "success_url": f"{APP_URL}/#home",
+            "failed_url": f"{APP_URL}/#home",
+            "timeout_url": f"{APP_URL}/#home",
         }
         payload = {k: v for k, v in payload.items() if v not in ("", None)}
-        webhook_url = ZAPUPI_WEBHOOK_URL or f"{app_url}/api/payments/zapupi/webhook"
-        payload["webhook_url"] = webhook_url
+        webhook_base = (ZAPUPI_WEBHOOK_URL or f"{APP_URL}/api/payments/zapupi/webhook").rstrip("/")
+        payload["webhook_url"] = f"{webhook_base}/{order_id}/{_webhook_sig(order_id)}"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         timeout = aiohttp.ClientTimeout(total=12)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -651,11 +982,18 @@ async def handle_zapupi_order(request: web.Request):
         gateway_payload = gateway_data.get("data") if isinstance(gateway_data.get("data"), dict) else gateway_data
         payment_url = gateway_payload.get("payment_url") or gateway_payload.get("paymentUrl") or gateway_payload.get("checkout_url") or gateway_payload.get("redirect_url")
         if not payment_url:
-            return _json({"status": "error", "error": gateway_data.get("message") or "ZapUPI did not return payment_url", "gateway": gateway_data}, 502)
+            return _json({"status": "error", "error": gateway_data.get("message") or "ZapUPI did not return payment_url"}, 502)
+        # never send the gateway's raw reply (it may contain our key / signed webhook) back to the browser
+        safe_gateway = {"payment_url": payment_url}
         orders = _load_json(ORDERS_FILE, [])
-        orders.append({"id": order_id, "user_id": user["id"], "username": user["username"], "plan_id": plan["id"], "plan_name": plan["name"], "price_inr": plan["price_inr"], "payment_method": "ZapUPI", "status": "pending", "created_at": int(time.time()), "gateway": gateway_data})
+        orders.append({"id": order_id, "user_id": user["id"], "username": user["username"], "plan_id": plan["id"],
+                       "plan_name": plan["name"], "price_inr": plan["price_inr"], "price_usd": plan.get("price_usd"),
+                       "slots": plan["slots"], "duration_hours": plan["duration_hours"],
+                       "payment_method": "ZapUPI", "status": "pending", "created_at": int(time.time()),
+                       "user_telegram": str(data.get("user_telegram", "")).strip()[:64],
+                       "gateway": safe_gateway})
         _save_json(ORDERS_FILE, orders)
-        return _json({"status": "ok", "order_id": order_id, "payment_url": payment_url, "gateway": gateway_data})
+        return _json({"status": "ok", "order_id": order_id, "payment_url": payment_url, "gateway": safe_gateway})
     except Exception:
         return _json({"status": "error", "error": "Unable to create UPI order"}, 502)
 
@@ -664,18 +1002,24 @@ async def handle_plan_order(request: web.Request):
     user = _get_user(request)
     if not user:
         return _json({"status": "error", "error": "Not authenticated"}, 401)
+    if _limited(request, "order", 10, 3600, who=user["id"]):
+        return _too_many()
     try:
         data = await request.json()
         plan_id = str(data.get("plan_id", "")).strip()
-        txn = str(data.get("transaction_id", "")).strip()
-        tg = str(data.get("user_telegram", "")).strip()
-        method = str(data.get("payment_method", "UPI")).strip()
+        txn = str(data.get("transaction_id", "")).strip()[:64]
+        tg = str(data.get("user_telegram", "")).strip()[:64]
+        method = str(data.get("payment_method", "UPI")).strip()[:20]
         if not plan_id or not txn:
             return _json({"status": "error", "error": "plan_id and transaction_id required"})
         plan = next((p for p in load_plans() if p["id"] == plan_id), None)
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"})
         orders = _load_json(ORDERS_FILE, [])
+        # one payment reference can only ever be used for one order
+        if any(str(o.get("transaction_id", "")).strip().lower() == txn.lower()
+               and o.get("status") in ("pending", "approved", "paid") for o in orders):
+            return _json({"status": "error", "error": "This transaction ID was already submitted"})
         order = {
             "id": "ORD-" + secrets.token_hex(4).upper(),
             "user_id": user["id"],
@@ -697,8 +1041,8 @@ async def handle_plan_order(request: web.Request):
         _save_json(ORDERS_FILE, orders)
         bot_state.log(f"Order {order['id']} from {user['username']} ({plan['name']})", "info")
         return _json({"status": "ok", "order_id": order["id"]})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Could not create order"})
 
 
 async def handle_my_orders(request: web.Request):
@@ -744,16 +1088,22 @@ async def handle_free_plan_request(request: web.Request):
     if not user:
         return _json({"status": "error", "error": "Not authenticated"}, 401)
     try:
+        if _limited(request, "freeplan", 5, 86400):
+            return _too_many()
         if user.get("free_plan_claimed"):
             return _json({"status": "error", "error": "Free plan already used"})
         data = await request.json()
-        tg = str(data.get("telegram", "")).strip()
-        reason = str(data.get("reason", "")).strip()
-        if not tg:
+        tg = str(data.get("telegram", "")).strip()[:64]
+        reason = str(data.get("reason", "")).strip()[:300]
+        tg_norm = _norm_tg(tg)
+        if len(tg_norm) < 3:
             return _json({"status": "error", "error": "Telegram required"})
         reqs = _load_json(FREE_PLAN_FILE, [])
         if any(r.get("user_id") == user["id"] and r.get("status") == "pending" for r in reqs):
             return _json({"status": "error", "error": "You already have a pending request"})
+        # one free trial per Telegram handle (stops the same person making many accounts)
+        if any(_norm_tg(r.get("telegram", "")) == tg_norm and r.get("status") in ("pending", "approved") for r in reqs):
+            return _json({"status": "error", "error": "This Telegram username already requested the free plan"})
         req = {
             "id": "FP-" + secrets.token_hex(4).upper(),
             "user_id": user["id"],
@@ -761,6 +1111,7 @@ async def handle_free_plan_request(request: web.Request):
             "display_name": user.get("display_name", user["username"]),
             "telegram": tg,
             "reason": reason,
+            "ip": _client_ip(request),
             "status": "pending",
             "created_at": int(time.time()),
             "approved_at": None,
@@ -769,8 +1120,8 @@ async def handle_free_plan_request(request: web.Request):
         _save_json(FREE_PLAN_FILE, reqs)
         bot_state.log(f"Free plan request from {user['username']}", "info")
         return _json({"status": "ok", "message": "Request sent to admin"})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Could not send request"})
 
 
 # ==================== ACCOUNT HANDLERS ====================
@@ -876,6 +1227,16 @@ async def _purge_account(ids: set):
             print(f"[DELETE] cleanup callback failed: {e}")
 
 
+def _owned_entry_count(entries: List[Dict], owner_id: str) -> int:
+    return sum(1 for a in entries if a.get("owner_user_id") == owner_id)
+
+
+def _owns_uid(user: Optional[Dict], is_admin: bool, uid: str) -> bool:
+    if is_admin:
+        return True
+    return _user_owns_any(user, _collect_identities(uid, ""))
+
+
 async def handle_account_add(request: web.Request):
     user = _get_user(request)
     is_admin = _get_admin(request)
@@ -888,9 +1249,10 @@ async def handle_account_add(request: web.Request):
             mode = "auto"
 
         if not is_admin:
-            visible = [a for a in bot_state.accounts.values() if a.get("owner_user_id") == user["id"]]
-            if len(visible) >= _slot_limit(user):
-                return _json({"status": "error", "error": "No slots left. Buy a plan."})
+            if _limited(request, "acc-add", 60, 60, who=user["id"]):
+                return _too_many()
+            if not _plan_active(user):
+                return _json({"status": "error", "error": "Your plan has expired. Buy a plan to add accounts."})
 
         owner_id = user["id"] if user else "admin"
         owner_name = user["username"] if user else "admin"
@@ -901,16 +1263,32 @@ async def handle_account_add(request: web.Request):
             pwd = str(data["password"]).strip()
             if not uid or not pwd:
                 return _json({"status": "error", "error": "UID and Password required"})
+            if len(uid) > 64 or len(pwd) > 128:
+                return _json({"status": "error", "error": "UID or password too long"})
+            existing = next((a for a in accounts if str(a.get("uid")) == uid), None)
+            if existing and not is_admin and existing.get("owner_user_id") != owner_id:
+                return _json({"status": "error", "error": "This account is already registered by another user"})
+            others = [a for a in accounts if str(a.get("uid")) != uid]
+            if not is_admin and _owned_entry_count(others, owner_id) >= _slot_limit(user):
+                return _json({"status": "error", "error": "No slots left. Buy a plan."})
             bot_state.undelete(uid)
-            accounts = [a for a in accounts if str(a.get("uid")) != uid]
+            accounts = others
             accounts.append({"uid": uid, "password": pwd, "mode": mode,
                              "owner_user_id": owner_id, "owner_username": owner_name})
         elif "token" in data:
             tok = str(data["token"]).strip()
             if not tok:
                 return _json({"status": "error", "error": "Token required"})
+            if len(tok) > 4096:
+                return _json({"status": "error", "error": "Token too long"})
+            existing = next((a for a in accounts if a.get("token") == tok), None)
+            if existing and not is_admin and existing.get("owner_user_id") != owner_id:
+                return _json({"status": "error", "error": "This account is already registered by another user"})
+            others = [a for a in accounts if a.get("token") != tok]
+            if not is_admin and _owned_entry_count(others, owner_id) >= _slot_limit(user):
+                return _json({"status": "error", "error": "No slots left. Buy a plan."})
             bot_state.undelete(*_token_ids(tok))
-            accounts = [a for a in accounts if a.get("token") != tok]
+            accounts = others
             accounts.append({"token": tok, "mode": mode,
                              "owner_user_id": owner_id, "owner_username": owner_name})
         else:
@@ -924,8 +1302,8 @@ async def handle_account_add(request: web.Request):
             payload["owner_username"] = owner_name
             asyncio.create_task(bot_state.refresh_callbacks["on_account_added"](payload))
         return _json({"status": "ok"})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Could not add account"})
 
 
 async def handle_account_bulk_add(request: web.Request):
@@ -938,41 +1316,65 @@ async def handle_account_bulk_add(request: web.Request):
         incoming = data.get("accounts", [])
         if not isinstance(incoming, list) or not incoming:
             return _json({"status": "error", "error": "accounts array required"})
+        if len(incoming) > MAX_ACCOUNTS_PER_REQUEST:
+            return _json({"status": "error", "error": f"Max {MAX_ACCOUNTS_PER_REQUEST} accounts per request"})
+
+        if not is_admin:
+            if _limited(request, "acc-bulk", 10, 60, who=user["id"]):
+                return _too_many()
+            if not _plan_active(user):
+                return _json({"status": "error", "error": "Your plan has expired. Buy a plan to add accounts."})
 
         owner_id = user["id"] if user else "admin"
         owner_name = user["username"] if user else "admin"
+        limit = None if is_admin else _slot_limit(user)
 
         accounts = _read_accounts()
         added = 0
         failed = 0
+        over_limit = 0
+        added_items = []
 
         for item in incoming:
+            if not isinstance(item, dict):
+                failed += 1
+                continue
             uid = str(item.get("uid", "")).strip()
             pwd = str(item.get("password", "")).strip()
             mode = str(item.get("mode", "auto")).strip().lower()
             if mode not in ("auto", "br", "lw"):
                 mode = "auto"
-            if not uid or not pwd:
+            if not uid or not pwd or len(uid) > 64 or len(pwd) > 128:
                 failed += 1
                 continue
+            existing = next((a for a in accounts if str(a.get("uid")) == uid), None)
+            if existing and not is_admin and existing.get("owner_user_id") != owner_id:
+                failed += 1                       # belongs to somebody else
+                continue
+            others = [a for a in accounts if str(a.get("uid")) != uid]
+            if limit is not None and _owned_entry_count(others, owner_id) >= limit:
+                over_limit += 1                   # slot limit reached
+                continue
             bot_state.undelete(uid)
-            accounts = [a for a in accounts if str(a.get("uid")) != uid]
+            accounts = others
             accounts.append({"uid": uid, "password": pwd, "mode": mode,
                              "owner_user_id": owner_id, "owner_username": owner_name})
+            added_items.append({"uid": uid, "password": pwd, "mode": mode,
+                                "owner_user_id": owner_id, "owner_username": owner_name})
             added += 1
         _write_accounts(accounts)
         bot_state.log(f"Bulk add: {added} nodes by {owner_name}", "success")
 
         if "on_account_added" in bot_state.refresh_callbacks:
-            for item in incoming:
-                if item.get("uid") and item.get("password"):
-                    payload = {"uid": item["uid"], "password": item["password"],
-                               "mode": item.get("mode", "auto"),
-                               "owner_user_id": owner_id, "owner_username": owner_name}
-                    asyncio.create_task(bot_state.refresh_callbacks["on_account_added"](payload))
-        return _json({"status": "ok", "added": added, "failed": failed})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+            for payload in added_items:
+                asyncio.create_task(bot_state.refresh_callbacks["on_account_added"](payload))
+        result = {"status": "ok", "added": added, "failed": failed + over_limit}
+        if over_limit:
+            result["limit_reached"] = True
+            result["message"] = f"{over_limit} account(s) skipped: no slots left. Buy a plan for more."
+        return _json(result)
+    except Exception:
+        return _json({"status": "error", "error": "Bulk add failed"})
 
 
 async def handle_account_delete(request: web.Request):
@@ -1004,13 +1406,21 @@ async def handle_account_refresh_all(request: web.Request):
     if not user and not is_admin:
         return _json({"status": "error", "error": "Not authenticated"}, 401)
     try:
+        if _limited(request, "refresh-all", 3, 30, who=(user["id"] if user else "admin")):
+            return _too_many()
         accounts = [a for a in bot_state.accounts.values() if is_admin or a.get("owner_user_id") == user["id"]]
         callback = bot_state.refresh_callbacks.get("on_refresh_account")
         if callback:
-            await asyncio.gather(*(callback(str(a.get("uid"))) for a in accounts), return_exceptions=True)
+            asyncio.create_task(_refresh_many(callback, [str(a.get("uid")) for a in accounts]))
         return _json({"status": "ok", "refreshed": len(accounts)})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Refresh failed"})
+
+
+async def _refresh_many(callback, uids: List[str]):
+    # runs in the background (the browser no longer waits for every account) and in small batches
+    for i in range(0, len(uids), 20):
+        await asyncio.gather(*(callback(u) for u in uids[i:i + 20]), return_exceptions=True)
 
 
 async def handle_account_refresh(request: web.Request):
@@ -1023,15 +1433,13 @@ async def handle_account_refresh(request: web.Request):
         uid = str(data.get("uid", "")).strip()
         if not uid:
             return _json({"status": "error", "error": "uid required"})
-        if not is_admin:
-            acc = bot_state.accounts.get(uid)
-            if acc and acc.get("owner_user_id") != user["id"]:
-                return _json({"status": "error", "error": "Not your account"}, 403)
+        if not _owns_uid(user, is_admin, uid):
+            return _json({"status": "error", "error": "Not your account"}, 403)
         if "on_refresh_account" in bot_state.refresh_callbacks:
             asyncio.create_task(bot_state.refresh_callbacks["on_refresh_account"](uid))
         return _json({"status": "ok"})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Refresh failed"})
 
 
 async def handle_account_restart(request: web.Request):
@@ -1044,16 +1452,14 @@ async def handle_account_restart(request: web.Request):
         uid = str(data.get("uid", "")).strip()
         if not uid:
             return _json({"status": "error", "error": "uid required"})
-        if not is_admin:
-            acc = bot_state.accounts.get(uid)
-            if acc and acc.get("owner_user_id") != user["id"]:
-                return _json({"status": "error", "error": "Not your account"}, 403)
+        if not _owns_uid(user, is_admin, uid):
+            return _json({"status": "error", "error": "Not your account"}, 403)
         if uid in bot_state.account_workers:
             bot_state.account_workers[uid].cancel()
         bot_state.log(f"Node {uid} restart requested", "warning", uid)
         return _json({"status": "ok"})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Restart failed"})
 
 
 async def handle_account_pause(request: web.Request):
@@ -1066,31 +1472,35 @@ async def handle_account_pause(request: web.Request):
         uid = str(data.get("uid", "")).strip()
         if not uid:
             return _json({"status": "error", "error": "uid required"})
-        if not is_admin:
-            acc = bot_state.accounts.get(uid)
-            if acc and acc.get("owner_user_id") != user["id"]:
-                return _json({"status": "error", "error": "Not your account"}, 403)
+        if not _owns_uid(user, is_admin, uid):
+            return _json({"status": "error", "error": "Not your account"}, 403)
+        acc = bot_state.accounts.get(uid) or {}
+        if not is_admin and bot_state.is_blocked(acc.get("owner_user_id"), uid):
+            return _json({"status": "error", "error": "Plan expired. Buy a plan to run this account."})
         new_state = not bot_state.is_paused(uid)
         bot_state.set_paused(uid, new_state)
         bot_state.update_status(uid, "PAUSED" if new_state else "ONLINE", 0)
         bot_state.log(f"Node {uid} {'PAUSED' if new_state else 'RESUMED'}", "warning", uid)
         return _json({"status": "ok", "paused": new_state, "message": "Paused" if new_state else "Resumed"})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Pause failed"})
 
 
 # ==================== ADMIN HANDLERS ====================
 async def handle_admin_login(request: web.Request):
     try:
+        if _limited(request, "admin-login", 5, 900):
+            return _too_many()
         data = await request.json()
         pw = str(data.get("password", "")).strip()
-        if pw != ADMIN_PASSWORD:
+        if not hmac.compare_digest(pw.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")):
+            await asyncio.sleep(1.0)
             return _json({"status": "error", "error": "Wrong password"})
         tok = _admin_new_token()
         bot_state.log("Admin logged in", "warning")
         return _json({"status": "ok", "token": tok, "expires_in": ADMIN_TOKEN_TTL})
-    except Exception as e:
-        return _json({"status": "error", "error": str(e)})
+    except Exception:
+        return _json({"status": "error", "error": "Login failed"})
 
 
 async def handle_admin_orders(request: web.Request):
@@ -1117,23 +1527,17 @@ async def handle_admin_orders_action(request: web.Request):
         if order.get("status") != "pending":
             return _json({"status": "error", "error": "Order already " + order.get("status", "?")})
 
-        order["status"] = "approved" if action == "approve" else "rejected"
+        if action == "approve":
+            if not _activate_paid_order(order, {}):
+                return _json({"status": "error", "error": "Could not activate (user or plan missing). Use Users -> add hours."})
+            order["status"] = "approved"
+            bot_state.log(f"Order {order_id} approved -> {order['username']} plan {order['plan_name']}", "success")
+        else:
+            order["status"] = "rejected"
+            bot_state.log(f"Order {order_id} rejected", "warning")
         order["approved_at"] = int(time.time())
         _save_json(ORDERS_FILE, orders)
-
-        if action == "approve":
-            user = user_store.find(order["username"])
-            if user:
-                now = int(time.time())
-                cur = user.get("plan_expires_at", 0)
-                base = cur if cur > now else now
-                user_store.update(order["username"],
-                                  slots=order["slots"],
-                                  plan=order["plan_name"],
-                                  plan_expires_at=base + order["duration_hours"] * 3600)
-                bot_state.log(f"Order {order_id} approved -> {order['username']} gets {order['slots']} slots", "success")
-        else:
-            bot_state.log(f"Order {order_id} rejected", "warning")
+        await user_store.flush_now()
         return _json({"status": "ok", "message": f"Order {action}d"})
     except Exception as e:
         return _json({"status": "error", "error": str(e)})
@@ -1203,6 +1607,7 @@ async def handle_admin_users_update(request: web.Request):
             fields["plan_expires_at"] = base + int(add_hours) * 3600
         if fields:
             user_store.update(user["username"], **fields)
+            _recompute_blocks()
         return _json({"status": "ok"})
     except Exception as e:
         return _json({"status": "error", "error": str(e)})
@@ -1347,6 +1752,7 @@ async def handle_admin_free_plan_action(request: web.Request):
                                   plan_expires_at=base + FREE_PLAN_HOURS * 3600,
                                   free_plan_claimed=True)
                 bot_state.log(f"Free plan approved for {req['username']}", "success")
+                _recompute_blocks()
         else:
             bot_state.log(f"Free plan rejected for {req['username']}", "warning")
         return _json({"status": "ok", "message": f"Free plan {action}d"})
@@ -1371,13 +1777,39 @@ async def handle_admin_download_credentials(request: web.Request):
 
 
 # ==================== INDEX ====================
+_INDEX_CACHE: Dict[str, Any] = {"mtime": 0, "html": ""}
+
+
 async def handle_index(request: web.Request):
-    if os.path.exists(TEMPLATE_PATH):
-        with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
-            content = f.read()
-    else:
+    try:
+        mtime = os.path.getmtime(TEMPLATE_PATH)
+        if mtime != _INDEX_CACHE["mtime"]:
+            with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+                _INDEX_CACHE["html"] = f.read()
+            _INDEX_CACHE["mtime"] = mtime
+        content = _INDEX_CACHE["html"]
+    except Exception:
         content = "<h1>templates/index.html not found!</h1>"
     return web.Response(text=content, content_type="text/html", charset="utf-8")
+
+
+async def handle_config(request: web.Request):
+    """Public links shown in the panel (kept on the server so there is one place to change them)."""
+    return _json({"status": "ok", "channel_1": TG_CHANNEL_1, "channel_2": TG_CHANNEL_2, "support": TG_SUPPORT})
+
+
+@web.middleware
+async def security_middleware(request: web.Request, handler):
+    resp = await handler(request)
+    try:
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")
+        if request.path.startswith("/api/"):
+            resp.headers["Cache-Control"] = "no-store"
+    except Exception:
+        pass
+    return resp
 
 
 # ==================== START ====================
@@ -1385,10 +1817,11 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     if port is None:
         port = int(os.environ.get("PORT", 20333))
 
-    app = web.Application(client_max_size=4 * 1024 * 1024)
+    app = web.Application(client_max_size=2 * 1024 * 1024, middlewares=[security_middleware])
     r = app.router
 
     r.add_get("/", handle_index)
+    r.add_get("/api/config", handle_config)
 
     r.add_post("/api/user/register", handle_user_register)
     r.add_post("/api/user/login", handle_user_login)
@@ -1400,7 +1833,8 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     r.add_get("/api/plans", handle_plans_list)
     r.add_post("/api/plans/order", handle_plan_order)
     r.add_post("/api/payments/zapupi/order", handle_zapupi_order)
-    r.add_post("/api/payments/zapupi/webhook", handle_zapupi_webhook)
+    r.add_post("/api/payments/zapupi/webhook", handle_zapupi_webhook)                       # legacy (needs gateway confirmation)
+    r.add_post("/api/payments/zapupi/webhook/{order_id}/{sig}", handle_zapupi_webhook)      # signed
     r.add_get("/api/plans/my-orders", handle_my_orders)
 
     r.add_get("/api/free-plan/status", handle_free_plan_status)
@@ -1432,7 +1866,16 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     site = web.TCPSite(runner, host, port)
     await site.start()
 
+    _recompute_blocks()                      # expired plans are blocked BEFORE any worker starts
+    bot_state._bg_tasks = [
+        asyncio.create_task(plan_enforcer()),
+        asyncio.create_task(user_store.flusher()),
+    ]
+
     print("\033[92m" + "=" * 60 + "\033[0m")
     print(f"\033[92m[+] EXE Web Dashboard running on http://{host}:{port}\033[0m")
-    print(f"\033[93m[!] Admin password: {ADMIN_PASSWORD}\033[0m")
+    if ADMIN_PASSWORD_GENERATED:
+        print("\033[93m[!] ADMIN_PASSWORD is not set (or is weak / the old default).\033[0m")
+        print(f"\033[93m[!] Temporary admin password for this run only: {ADMIN_PASSWORD}\033[0m")
+        print("\033[93m[!] Set a strong ADMIN_PASSWORD environment variable (8+ chars).\033[0m")
     print("\033[92m" + "=" * 60 + "\033[0m")
