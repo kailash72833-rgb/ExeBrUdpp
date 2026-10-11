@@ -355,9 +355,18 @@ class UserStore:
         self._last_tokens: Dict[str, str] = {}
         mongo_url = (os.environ.get("MONGODB_CONNECTION_STRING_2") or os.environ.get("MONGODB_CONNECTION_STRING", "")).strip()
         if mongo_url and MongoClient:
+            for attempt in range(3):         # a short Mongo hiccup at start-up must not wipe plans/users
+                try:
+                    self.mongo = MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+                    self.mongo.admin.command("ping")
+                    break
+                except Exception as exc:
+                    print(f"[STORAGE] Mongo connect attempt {attempt + 1}/3 failed: {exc}")
+                    self.mongo = None
+                    time.sleep(2)
             try:
-                self.mongo = MongoClient(mongo_url, serverSelectionTimeoutMS=3000)
-                self.mongo.admin.command("ping")
+                if self.mongo is None:
+                    raise RuntimeError("MongoDB not reachable")
                 try:
                     database = self.mongo.get_default_database()
                 except Exception:
@@ -1133,11 +1142,16 @@ def _write_accounts(accounts: List[Dict]):
     _save_json(ACCOUNTS_FILE, accounts)
 
 
+def token_key(token) -> str:
+    """Same identifier as Main.token_key: derived from the whole token, never from a prefix."""
+    return "tok_" + hashlib.sha1(str(token).encode("utf-8")).hexdigest()[:20]
+
+
 def _token_ids(token: str) -> set:
     token = str(token or "").strip()
     if not token:
         return set()
-    return {token, token[:10], f"tok_{token[:20]}"}
+    return {token, token_key(token)}
 
 
 def _credential_ids(key: str, cred: Dict) -> set:
