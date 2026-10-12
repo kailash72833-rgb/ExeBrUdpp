@@ -53,6 +53,8 @@ ACCOUNTS_FILE = "accounts.json"
 TOKEN_CACHE_FILE = "token_cache.json"
 DEVICES_FILE = "devices.json"
 TOKEN_CACHE_TTL = 1200
+SEARCH_STALL_TIMEOUT = float(os.environ.get("SEARCH_STALL_TIMEOUT", "240"))  # no match for this long -> fresh login (self-heal)
+VERBOSE_LOGS = os.environ.get("VERBOSE_LOGS", "0").strip().lower() in ("1", "true", "yes")
 
 START_MATCH_INTERVAL = 4.0
 NEW_MATCH_DELAY = 5.0
@@ -329,6 +331,12 @@ def print_warning(text):
         bot_state.log(text, "warning")
     except Exception:
         pass
+
+
+def print_debug(text):
+    """Very chatty lines (every search packet). Only shown with VERBOSE_LOGS=1 so 100s of accounts do not flood the log."""
+    if VERBOSE_LOGS:
+        print_info(text)
 
 
 def print_info(text):
@@ -877,7 +885,7 @@ async def start_game_lone_wolf(region, client_version, writer, key, iv):
     final_packet = reg_prefix + "0" * (6 - len(hex_length)) + hex_length + encrypted_packet
     writer.write(bytes.fromhex(final_packet))
     await writer.drain()
-    print_info(f"[LW] Lone Wolf Match Search Packet Sent ({packet_length} bytes, prefix: {reg_prefix}) | Region: {reg}")
+    print_debug(f"[LW] Lone Wolf Match Search Packet Sent ({packet_length} bytes, prefix: {reg_prefix}) | Region: {reg}")
 
 
 async def start_game_battle_royale(region, client_version, writer, key, iv):
@@ -900,7 +908,7 @@ async def start_game_battle_royale(region, client_version, writer, key, iv):
     final_packet = reg_prefix + "0" * (6 - len(hex_length)) + hex_length + encrypted_packet
     writer.write(bytes.fromhex(final_packet))
     await writer.drain()
-    print_info(f"[BR] Battle Royale Match Search Packet Sent ({packet_length} bytes, prefix: {reg_prefix}) | Region: {reg}")
+    print_debug(f"[BR] Battle Royale Match Search Packet Sent ({packet_length} bytes, prefix: {reg_prefix}) | Region: {reg}")
 
 
 async def has_ssan_zig(n):
@@ -1559,6 +1567,17 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
 # ============================================================
 # functional_lone_wolf — WITH MODE SUPPORT
 # ============================================================
+async def _safe_close(w):
+    """Close a TCP writer without ever hanging (a half-dead connection used to block wait_closed forever)."""
+    if not w:
+        return
+    try:
+        w.close()
+        await asyncio.wait_for(w.wait_closed(), timeout=3)
+    except Exception:
+        pass
+
+
 async def functional_lone_wolf(addrs, starter_packet, account_region, client_version,
                                 key, iv, account_id="", account_data=None,
                                 account_level: int = 2, max_reconnects=10,
@@ -1670,12 +1689,12 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                     pass
 
                 resolved_ip = await resolve_host_cloudflare(ip)
-                reader, writer = await asyncio.open_connection(resolved_ip, int(port))
+                reader, writer = await asyncio.wait_for(asyncio.open_connection(resolved_ip, int(port)), timeout=12)
                 raw_sock = writer.get_extra_info('socket')
                 if raw_sock:
                     optimize_tcp_socket(raw_sock)
                 writer.write(bytes.fromhex(current_token))
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=8)
 
                 try:
                     init_ka = await send_keep_alive(account_region)
@@ -1705,6 +1724,21 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                 reconnects = 0
                 no_response_count = 0
                 last_start_time = 0.0
+                search_started = asyncio.get_running_loop().time()   # when this search began (stall watchdog)
+                stall_limit = SEARCH_STALL_TIMEOUT + random.uniform(0, 30)   # jitter: accounts do not all re-login together
+
+                def _force_fresh_login(reason: str):
+                    """Throw the saved session away and log in again (fixes 'EXP stopped growing')."""
+                    print_warning(f"[SELF-HEAL] UID {uid_str}: {reason} -> fresh login")
+                    if current_account_data:
+                        try:
+                            if current_account_data.get('auth_uid'):
+                                cache_invalidate(str(current_account_data['auth_uid']))
+                            if current_account_data.get('auth_token'):
+                                cache_invalidate(token_key(current_account_data['auth_token']))
+                        except Exception:
+                            pass
+                    raise ConnectionError("Cache expired, " + reason)
 
                 async def send_start_match():
                     nonlocal search_attempts, last_start_time
@@ -1715,16 +1749,20 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         starter_func = start_game_lone_wolf
                     else:
                         starter_func = start_game_battle_royale
-                    print_info(f"[{mode_tag}] Sending StartMatch #{search_attempts} region: {current_region} (Lvl {current_level}, mode={_MODE})")
+                    print_debug(f"[{mode_tag}] Sending StartMatch #{search_attempts} region: {current_region} (Lvl {current_level}, mode={_MODE})")
                     try:
                         await asyncio.sleep(random.uniform(0.3, 0.6))
-                        await starter_func(current_region, client_version, writer, current_key, current_iv)
-                        print_success(f"[{mode_tag}] StartMatch packet sent")
+                        await asyncio.wait_for(
+                            starter_func(current_region, client_version, writer, current_key, current_iv),
+                            timeout=10)
+                        print_debug(f"[{mode_tag}] StartMatch packet sent")
                         active = await _get_match_count(uid_str)
                         try:
                             bot_state.update_status(uid_str, f"SEARCHING ({mode_tag})", active)
                         except Exception:
                             pass
+                    except asyncio.TimeoutError:
+                        raise ConnectionError("StartMatch write timed out (dead connection)")
                     except Exception as e:
                         print_error(f"start_game error: {e}")
                     last_start_time = asyncio.get_running_loop().time()
@@ -1745,6 +1783,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
 
                     if bot_state.is_paused(uid_str):
                         await cancel_play_matches()      # a match that is already running is stopped too
+                        search_started = asyncio.get_running_loop().time()   # a pause is not a stall
                         try:
                             bot_state.update_status(uid_str, "PAUSED", 0)
                         except Exception:
@@ -1760,6 +1799,15 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                             send_start_match._pause_logged = False
 
                     now = asyncio.get_running_loop().time()
+                    # ---- self-heal: old session / search that never finds a match ----
+                    if SEARCH_STALL_TIMEOUT > 0 and now - search_started >= stall_limit:
+                        _force_fresh_login(f"no match for {int(SEARCH_STALL_TIMEOUT)}s")
+                    try:
+                        _cached_at = float((current_account_data or {}).get('cached_at') or 0)
+                    except Exception:
+                        _cached_at = 0.0
+                    if _cached_at and time.time() - _cached_at > TOKEN_CACHE_TTL + 60:
+                        _force_fresh_login("session is older than the allowed age")
                     if now - last_start_time >= START_MATCH_INTERVAL:
                         await send_start_match()
 
@@ -1780,7 +1828,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                     no_response_count = 0
 
                     if hex_data.startswith("0300") and 10 < packet_length < 30:
-                        print_info("Match starting, please wait...")
+                        print_debug("Match starting, please wait...")
                         continue
 
                     if hex_data.startswith("0300") and packet_length >= 300:
@@ -1836,11 +1884,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                 )
                                 play_matches.append(new_match)
                                 consecutive_parse_failures = 0
-                                try:
-                                    writer.close()
-                                    await writer.wait_closed()
-                                except Exception:
-                                    pass
+                                await _safe_close(writer)
                                 print_info(f"[OFFLINE] {NEW_MATCH_DELAY}s offline -> reload token -> new StartMatch")
                                 await asyncio.sleep(NEW_MATCH_DELAY)
                                 reconnects = 0
@@ -1859,11 +1903,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                         except Exception:
                                             pass
                                     consecutive_parse_failures = 0
-                                try:
-                                    writer.close()
-                                    await writer.wait_closed()
-                                except Exception:
-                                    pass
+                                await _safe_close(writer)
                                 await asyncio.sleep(NON_MATCH_RECONNECT_DELAY)
                                 break
                         except Exception as e:
@@ -1879,11 +1919,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                     except Exception:
                                         pass
                                 consecutive_parse_failures = 0
-                            try:
-                                writer.close()
-                                await writer.wait_closed()
-                            except Exception:
-                                pass
+                            await _safe_close(writer)
                             await asyncio.sleep(NON_MATCH_RECONNECT_DELAY)
                             break
 
@@ -1904,14 +1940,13 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
             except Exception as e:
                 if gateway_ping_task:
                     gateway_ping_task.cancel()
-                print_error(f"[FUNCTIONAL] TCP state ({uid_str}): {e}")
+                if "Cache expired" in str(e):
+                    print_warning(f"[FUNCTIONAL] ({uid_str}) {e}")
+                else:
+                    print_error(f"[FUNCTIONAL] TCP state ({uid_str}): {e}")
                 play_matches[:] = [m for m in play_matches if not m.done()]
                 if writer:
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                    await _safe_close(writer)
                 if "Cache expired" in str(e):
                     print_warning(f"[FUNCTIONAL] Triggering re-login for {uid_str}")
                     break
@@ -1926,11 +1961,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                 if gateway_ping_task:
                     gateway_ping_task.cancel()
                 if writer:
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                    await _safe_close(writer)
 
     except asyncio.CancelledError:
         print_warning(f"[FUNCTIONAL] Outer cancelled. {len(play_matches)} UDP matches still running.")
@@ -1985,21 +2016,13 @@ async def informational(addrs, starter_packet, key, iv, region="ID", max_reconne
             if ping_task:
                 ping_task.cancel()
             if writer:
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+                await _safe_close(writer)
             raise
         except Exception:
             if ping_task:
                 ping_task.cancel()
             if writer:
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+                await _safe_close(writer)
             reconnects += 1
             if reconnects > max_reconnects:
                 await asyncio.sleep(3)
@@ -2079,7 +2102,7 @@ async def refresh_account_profile(account_data_or_uid: Any):
         try:
             if acc_id in bot_state.accounts:
                 old_level = int(bot_state.accounts[acc_id].get('level', 0) or 0)
-                old_exp = int(bot_state.accounts[acc_id].get('exp', 0) or 0)
+                old_exp = int(bot_state.accounts[acc_id].get('current_exp', 0) or 0)
         except Exception:
             pass
         try:
