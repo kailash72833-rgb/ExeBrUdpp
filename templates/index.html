@@ -4,7 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#FFFCF4">
-<title>EXE LEVEL UP | Gaming Dashboard</title>
+<title>Level Up Bot | Fast Free Fire Level Up & Script Macro</title>
+<meta name="description" content="Get the best auto level up bot for Free Fire. Discover the ultimate Level Up Package, FF Level Macro, and fast Free Fire scripts to boost your ID safely and quickly.">
+<meta name="keywords" content="Free fire level bot, Level Up Package, Level Up Fast, Free Fire Script, FF level Macro, Auto Level Up bot">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://www.levelupbot.site/">
+<meta property="og:title" content="Level Up Bot | Fast Free Fire Level Up">
+<meta property="og:description" content="Use the ultimate auto level up bot and macro script for Free Fire. Safely boost your ID today.">
+<meta property="og:url" content="https://www.levelupbot.site/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Level Up Bot">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Level Up Bot | Fast Free Fire Level Up">
+<meta name="twitter:description" content="Use the ultimate auto level up bot and macro script for Free Fire. Safely boost your ID today.">
+<meta name="application-name" content="Level Up Bot">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebApplication","name":"Level Up Bot","url":"https://www.levelupbot.site/","applicationCategory":"GameApplication","operatingSystem":"Web","description":"Auto level up bot for Free Fire. Level Up Package, FF Level Macro and fast Free Fire script to boost your ID safely and quickly.","keywords":"Free fire level bot, Level Up Package, Level Up Fast, Free Fire Script, FF level Macro, Auto Level Up bot, Free Fire level up bot, FF level up kaise kare, Free Fire ID level up, FF EXP bot, Free Fire auto level up","offers":{"@type":"AggregateOffer","priceCurrency":"INR","lowPrice":"99","highPrice":"1499"}}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@600;800;900&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
@@ -708,6 +724,15 @@ header.top{
   position:relative;
   box-shadow:var(--shadow-pop);
   animation:popIn .2s cubic-bezier(0.16, 1, 0.3, 1);
+  max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);
+  overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+}
+.m-actions{display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:-22px;margin:18px -22px -22px;padding:12px 22px;background:var(--card);border-top:1px solid var(--border);z-index:2}
+@media(max-width:520px){
+  .modal{padding:10px}
+  .mbox{padding:18px;border-radius:16px;max-height:calc(100vh - 20px);max-height:calc(100dvh - 20px)}
+  .m-actions{bottom:-18px;margin:16px -18px -18px;padding:12px 18px}
+  .m-actions .btn-deploy,.m-actions .mcancel{flex:1;justify-content:center;padding:12px 14px}
 }
 @keyframes popIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
 .mhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
@@ -762,7 +787,16 @@ header.top{
 .cred{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
 .cred-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)}
 .cred-head h4{font-size:14px;font-weight:800;color:var(--text)}
-.cred-row{display:flex;align-items:center;justify-content:space-between;font-size:12px;padding:4px 0}
+.cred-row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;padding:5px 0;min-width:0}
+.cred-lbl{flex-shrink:0}
+.cred-val{flex:1 1 auto;min-width:0;text-align:right;overflow-wrap:anywhere;word-break:break-word}
+.cred-btn{flex-shrink:0}
+@media(max-width:520px){
+  .cred-row{flex-wrap:wrap;row-gap:2px}
+  .cred-lbl{flex:0 0 100%}
+  .cred-val{text-align:left;flex:1 1 0}
+  .cred .cred-btn{padding:6px 10px;font-size:14px}
+}
 .cred-lbl{color:var(--text-3);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.6px}
 .cred-val{font-family:var(--font-m);color:var(--text);font-weight:600}
 .cred-btn{background:transparent;border:none;color:var(--clay-ink);cursor:pointer;padding:2px 6px;font-size:12px}
@@ -886,10 +920,21 @@ button.busy{position:relative;overflow:hidden}
   .header-actions .h-action-btn{min-height:36px}
 }
 @media(min-width:900px){.mobile-tabbar{display:none!important}}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.seo-note{font-size:10.5px;line-height:1.55;color:var(--text-muted);max-width:560px;margin:10px auto 0}
 
 </style>
 </head>
 <body>
+
+<!-- SEO: screen-reader accessible content (readable by search engines) -->
+<section class="sr-only" aria-label="About Level Up Bot">
+  <h1>Level Up Bot - Fast Free Fire Level Up &amp; Script Macro</h1>
+  <p>Welcome to the best Free fire level bot tool. Our Level Up Package helps you achieve Level Up Fast using a secure Free Fire Script and FF level Macro. Try our Auto Level Up bot today.</p>
+  <p>Level Up Bot is an automatic Free Fire level up service: add your Free Fire ID, start the Free Fire level up bot and watch your EXP grow every day. Plans start from 1 day, with a free trial available. FF level up bot, Free Fire ID level up, FF EXP bot, Free Fire auto level up, FF level up kaise kare, Free Fire level up trick, Free Fire EXP farming and fast Free Fire level up are all supported from one simple dashboard.</p>
+  <h2>Level Up Package plans</h2>
+  <p>Choose a Level Up Package of 1 day, 3 days, 10 days or 20 days, or ask for a custom plan on Telegram @Brexxee. Updates and proof are posted on our Telegram channels @BrExeee and @Exeprooff.</p>
+</section>
 
 <aside class="sidebar" id="sidebar">
   <div class="sb-brand">
@@ -1092,6 +1137,7 @@ button.busy{position:relative;overflow:hidden}
     <div class="footer">
       <div style="font-weight:700;font-size:12.5px;margin-bottom:5px;color:var(--text-2);">Made with <span class="heart">❤</span> by <b>EXE OFFICIAL</b></div>
       <div style="font-size:11px;">Powered by <b>@BrExeee</b> • © 2026 LEVEL UP SERVICE</div>
+      <p class="seo-note">Welcome to the best Free fire level bot tool. Our Level Up Package helps you achieve Level Up Fast using a secure Free Fire Script and FF level Macro. Try our Auto Level Up bot today.</p>
     </div>
   </main>
 
@@ -1171,7 +1217,7 @@ button.busy{position:relative;overflow:hidden}
         </select>
       </div>
 
-      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
+      <div class="m-actions">
         <button type="button" class="mcancel" onclick="closeM('injectModal')">Cancel</button>
         <button type="submit" class="btn-deploy" id="btnAddAcc"><i class="fa-solid fa-rocket"></i> Deploy node</button>
       </div>
@@ -1777,6 +1823,7 @@ function renderPlans(){
   if(allPlans.length){
     html += allPlans.map(p=>`<div class="plan ${p.popular?'pop':''}">${p.badge?`<div class="plan-badge">${esc(p.badge)}</div>`:''}<div class="plan-icon"><i class="fa-solid fa-bolt"></i></div><h3>${esc(p.name)}</h3><p class="dur">${esc(p.duration_text||'')}</p><div class="price"><span class="main">₹${p.price_inr}</span><span class="alt">/ $${p.price_usd}</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>${p.slots} accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li><li><i class="fa-solid fa-circle-check"></i> <span>${esc(p.duration_text)}</span></li></ul><button class="btn-buy" onclick="buyPlan('${esc(p.id)}')"><i class="fa-solid fa-bolt"></i> Buy Now</button></div>`).join('');
   }
+  html += `<div class="plan custom"><div class="plan-badge">Custom</div><div class="plan-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div><h3>Custom Plan</h3><p class="dur">Your own days &amp; slots</p><div class="price"><span class="main" style="font-size:22px">Your Choice</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>Any number of days</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Any number of accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Special price on bulk / reseller</span></li></ul><a class="btn-buy" href="https://t.me/Brexxee" target="_blank" rel="noopener" style="text-decoration:none"><i class="fa-brands fa-telegram"></i> Contact on Telegram</a></div>`;
   box.innerHTML = html;
 }
 
@@ -2027,6 +2074,7 @@ async function updateFreePlanButton(){
 document.querySelectorAll('.modal').forEach(m=>{ m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('on'); }); });
 
 setLoader(false);
+renderPlans();
 checkAuth();
 </script>
 </body>
