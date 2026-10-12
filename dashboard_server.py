@@ -79,7 +79,10 @@ else:
 ZAPUPI_API_KEY = (os.environ.get("Key") or os.environ.get("ZAPUPI_API_KEY", "")).strip()
 ZAPUPI_CREATE_ORDER_URL = os.environ.get("ZAPUPI_CREATE_ORDER_URL", "https://pay.zapupi.com/api/create-order")
 ZAPUPI_WEBHOOK_URL = os.environ.get("ZAPUPI_WEBHOOK_URL", "")
-APP_URL = (os.environ.get("APP_URL") or "https://nxc-bot-production.up.railway.app").strip().rstrip("/")
+# Public address of the site (payment redirects + webhook + sitemap are built from this).
+# Set the APP_URL environment variable on Railway to the same value.
+DEFAULT_APP_URL = "https://www.levelupbot.site"
+APP_URL = (os.environ.get("APP_URL") or DEFAULT_APP_URL).strip().rstrip("/")
 
 # Secret used to sign the per-order webhook URL (an attacker cannot forge "payment success").
 _WEBHOOK_SECRET = (os.environ.get("WEBHOOK_SECRET") or ZAPUPI_API_KEY or secrets.token_hex(32)).encode("utf-8")
@@ -1807,6 +1810,28 @@ async def handle_index(request: web.Request):
     return web.Response(text=content, content_type="text/html", charset="utf-8")
 
 
+async def handle_robots(request: web.Request):
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /api/\n"
+        f"Sitemap: {APP_URL}/sitemap.xml\n"
+    )
+    return web.Response(text=body, content_type="text/plain", charset="utf-8",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+async def handle_sitemap(request: web.Request):
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"  <url><loc>{APP_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>\n"
+        "</urlset>\n"
+    )
+    return web.Response(text=body, content_type="application/xml", charset="utf-8",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
 async def handle_config(request: web.Request):
     """Public links shown in the panel (kept on the server so there is one place to change them)."""
     return _json({"status": "ok", "channel_1": TG_CHANNEL_1, "channel_2": TG_CHANNEL_2, "support": TG_SUPPORT})
@@ -1835,6 +1860,8 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     r = app.router
 
     r.add_get("/", handle_index)
+    r.add_get("/robots.txt", handle_robots)
+    r.add_get("/sitemap.xml", handle_sitemap)
     r.add_get("/api/config", handle_config)
 
     r.add_post("/api/user/register", handle_user_register)
