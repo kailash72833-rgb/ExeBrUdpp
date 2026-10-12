@@ -19,7 +19,7 @@ services:
         sync: false
       - key: ZAPUPI_API_KEY
         sync: false
-      # Public URL of this site (used for the payment webhook + redirects), e.g. https://your-app.onrender.com
+      # Public URL of this site (used for the payment webhook + redirects). Use: https://www.levelupbot.site
       - key: APP_URL
         sync: false
       # Secret that signs payment webhooks. Any long random text.
