@@ -23,6 +23,9 @@ services:
       - key: APP_URL
         sync: false
       # Secret that signs payment webhooks. Any long random text.
+      # Secret address of the admin page: https://www.levelupbot.site/<ADMIN_PATH> (8+ letters/numbers, keep it private)
+      - key: ADMIN_PATH
+        sync: false
       - key: WEBHOOK_SECRET
         generateValue: true
       # Optional: ZapUPI order-status URL, lets old/unsigned callbacks be double-checked
