@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#FFFCF4">
+<!--ADMIN_BOOT-->
 <title>Level Up Bot | Fast Free Fire Level Up & Script Macro</title>
 <meta name="description" content="Get the best auto level up bot for Free Fire. Discover the ultimate Level Up Package, FF Level Macro, and fast Free Fire scripts to boost your ID safely and quickly.">
 <meta name="keywords" content="Free fire level bot, Level Up Package, Level Up Fast, Free Fire Script, FF level Macro, Auto Level Up bot">
@@ -23,8 +24,10 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@600;800;900&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@600;800;900&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@600;800;900&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"></noscript>
+<link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"></noscript>
 <style>
 :root{
   /* Theme: Warm Ivory + Clay Orange */
@@ -92,7 +95,7 @@ body{
 
 /* SIDEBAR */
 .sidebar{position:fixed;top:0;bottom:0;left:0;width:260px;background:#FBF4E4;border-right:1px solid var(--border);z-index:1001;padding:20px 14px;display:flex;flex-direction:column;transform:translateX(-102%);transition:transform .25s cubic-bezier(0.16, 1, 0.3, 1);overflow-y:auto;box-shadow:10px 0 30px rgba(120,80,40,0.12);}
-.sb-backdrop{position:fixed;inset:0;background:rgba(43,33,24,.45);backdrop-filter:blur(4px);z-index:1000;opacity:0;pointer-events:none;transition:opacity .2s}
+.sb-backdrop{position:fixed;inset:0;background:rgba(43,33,24,.52);z-index:1000;opacity:0;pointer-events:none;transition:opacity .2s}
 body.sb-open .sidebar{transform:translateX(0)}
 body.sb-open .sb-backdrop{opacity:1;pointer-events:all}
 @media(min-width:900px){.sidebar{transform:translateX(0);box-shadow:none}.sb-backdrop{display:none !important}body{padding-left:260px}.app{max-width:1240px;margin-left:0}}
@@ -104,7 +107,7 @@ body.sb-open .sb-backdrop{opacity:1;pointer-events:all}
 .sb-sub{font-size:9.5px;color:var(--text-3);letter-spacing:1px;margin-top:3px;text-transform:uppercase;font-weight:700}
 
 .sb-nav{display:flex;flex-direction:column;gap:3px;flex:1}
-.sb-item{display:flex;align-items:center;gap:12px;padding:11px 14px;color:var(--text-2);font-family:var(--font-h);font-size:13.5px;font-weight:600;border-radius:10px;text-decoration:none;cursor:pointer;transition:all .18s;border:1px solid transparent;}
+.sb-item{display:flex;align-items:center;gap:12px;padding:11px 14px;color:var(--text-2);font-family:var(--font-h);font-size:13.5px;font-weight:600;border-radius:10px;text-decoration:none;cursor:pointer;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;border:1px solid transparent;}
 .sb-item i{width:20px;text-align:center;font-size:15px;color:var(--text-3);transition:color .18s}
 .sb-item:hover{color:var(--text);background:var(--card-3);border-color:var(--border)}
 .sb-item:hover i{color:var(--clay-ink)}
@@ -119,7 +122,7 @@ body.sb-open .sb-backdrop{opacity:1;pointer-events:all}
 .sb-plan{font-size:9.5px;color:var(--clay-ink);font-weight:700;text-transform:uppercase;letter-spacing:.6px;margin-top:2px}
 .sb-plan.adm{color:var(--on-clay);background:var(--clay);padding:2px 7px;border-radius:4px;display:inline-block}
 
-.sb-btn{background:var(--card);border:1px solid var(--border);color:var(--text-2);padding:10px 12px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .18s;width:100%}
+.sb-btn{background:var(--card);border:1px solid var(--border);color:var(--text-2);padding:10px 12px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:8px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;width:100%}
 .sb-btn:hover{background:var(--card-3);border-color:var(--clay);color:var(--text)}
 .sb-btn.grad{background:var(--clay);color:var(--on-clay);border-color:transparent;font-weight:800;box-shadow:var(--shadow-clay)}
 .sb-btn.grad:hover{background:var(--clay-h);box-shadow:0 6px 20px rgba(226,111,74,0.5);transform:translateY(-1px)}
@@ -133,8 +136,8 @@ header.top{
   justify-content:space-between;
   gap:12px;
   padding:10px 14px;
-  background:rgba(255, 255, 255, 0.90);
-  backdrop-filter:blur(12px);
+  background:rgba(255,255,255,0.98);
+  
   border:1px solid var(--border);
   border-radius:var(--r);
   margin-bottom:12px;
@@ -157,7 +160,7 @@ header.top{
   align-items:center;
   justify-content:center;
   flex-shrink:0;
-  transition:all .15s;
+  transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s;
 }
 .hamburger:hover{background:var(--card-3);color:var(--text);border-color:var(--clay-line)}
 
@@ -210,7 +213,7 @@ header.top{
   align-items:center;
   justify-content:center;
   gap:6px;
-  transition:all .18s;
+  transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;
   letter-spacing:.5px;
 }
 .h-action-btn.icon-only{width:34px;padding:0;border-radius:8px;}
@@ -244,7 +247,7 @@ header.top{
   font-weight:700;
   box-shadow:0 2px 10px rgba(120,80,40,0.08);
   cursor:pointer;
-  transition:all .18s;
+  transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;
 }
 .quick-pill-dropdown:hover{border-color:var(--clay);box-shadow:0 0 12px rgba(226,111,74,0.25)}
 .quick-refresh-btn{
@@ -260,7 +263,7 @@ header.top{
   font-size:12px;
   font-weight:700;
   cursor:pointer;
-  transition:all .18s;
+  transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;
 }
 .quick-refresh-btn:hover{border-color:var(--clay);background:var(--clay-soft);color:var(--clay-ink)}
 
@@ -341,10 +344,11 @@ header.top{
   flex-direction:column;
   gap:14px;
   position:relative;
-  transition:all .2s;
+  transition:background-color .2s,border-color .2s,color .2s,box-shadow .2s,transform .2s,opacity .2s;
   box-shadow:var(--shadow-card);
 }
-.acard:hover{border-color:var(--clay-line);box-shadow:0 12px 32px rgba(120,80,40,0.14), 0 0 20px rgba(226,111,74,0.10)}
+.acard{content-visibility:auto;contain-intrinsic-size:auto 440px}
+@media(hover:hover){.acard:hover{border-color:var(--clay-line);box-shadow:0 12px 32px rgba(120,80,40,0.14), 0 0 20px rgba(226,111,74,0.10)}}
 
 /* Top Avatar & Nickname Row */
 .acard-profile-row{
@@ -590,7 +594,7 @@ header.top{
   align-items:center;
   justify-content:center;
   gap:6px;
-  transition:all .18s;
+  transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;
   background:var(--card);
   border:1px solid var(--border);
   color:var(--text);
@@ -662,7 +666,7 @@ header.top{
   font-weight:800;
   font-family:var(--font-m);
   cursor:pointer;
-  transition:all .15s;
+  transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s;
 }
 .acard-mode-pill:hover{background:rgba(163, 95, 0, 0.14)}
 .acard-mode-pill.br{background:var(--clay-soft);border-color:var(--clay-line);color:var(--clay-ink)}
@@ -678,7 +682,7 @@ header.top{
   display:inline-flex;
   align-items:center;
   gap:5px;
-  transition:all .15s;
+  transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s;
 }
 .acard-quick-refresh:hover{background:var(--clay-soft);border-color:var(--clay);color:var(--clay-ink)}
 
@@ -689,9 +693,9 @@ header.top{
 .empty p{font-size:13px;color:var(--text-3);margin-bottom:16px}
 
 /* BUTTONS */
-.btn-primary{background:var(--clay);border:none;color:var(--on-clay);padding:9px 18px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:7px;transition:all .18s;box-shadow:var(--shadow-clay)}
+.btn-primary{background:var(--clay);border:none;color:var(--on-clay);padding:9px 18px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:7px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;box-shadow:var(--shadow-clay)}
 .btn-primary:hover{background:var(--clay-h);box-shadow:0 6px 22px rgba(226,111,74,0.5);transform:translateY(-1px)}
-.btn-outline{background:var(--card);border:1px solid var(--border);color:var(--text-2);padding:9px 18px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:7px;transition:all .18s}
+.btn-outline{background:var(--card);border:1px solid var(--border);color:var(--text-2);padding:9px 18px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:7px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s}
 .btn-outline:hover{background:var(--clay-soft);border-color:var(--clay-line);color:var(--clay-ink)}
 
 /* FORMS, INPUTS & MODALS */
@@ -707,12 +711,12 @@ header.top{
   font-size:13.5px;
   font-family:inherit;
   outline:none;
-  transition:all .18s;
+  transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;
 }
 .fin:focus{border-color:var(--clay);box-shadow:0 0 0 3px rgba(226,111,74,0.22)}
 .fin::placeholder{color:var(--text-muted)}
 
-.modal{position:fixed;inset:0;background:rgba(43,33,24,.50);backdrop-filter:blur(6px);z-index:2000;display:none;align-items:center;justify-content:center;padding:16px;}
+.modal{position:fixed;inset:0;background:rgba(43,33,24,.58);z-index:2000;display:none;align-items:center;justify-content:center;padding:16px;}
 .modal.on{display:flex}
 .mbox{
   background:var(--card);
@@ -739,11 +743,11 @@ header.top{
 .mhead h3{font-family:var(--font-h);font-size:17px;font-weight:800;color:var(--text)}
 .mclose{background:transparent;border:none;color:var(--text-3);font-size:16px;cursor:pointer;padding:4px;transition:color .15s}
 .mclose:hover{color:var(--clay-ink)}
-.mcancel{background:transparent;border:1px solid var(--border);color:var(--text-2);padding:9px 16px;border-radius:10px;font-weight:700;font-size:12.5px;cursor:pointer;transition:all .15s}
+.mcancel{background:transparent;border:1px solid var(--border);color:var(--text-2);padding:9px 16px;border-radius:10px;font-weight:700;font-size:12.5px;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s}
 .mcancel:hover{background:var(--card-3);color:var(--text)}
-.btn-deploy{background:var(--clay);border:none;color:var(--on-clay);padding:10px 20px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:all .18s;box-shadow:var(--shadow-clay)}
+.btn-deploy{background:var(--clay);border:none;color:var(--on-clay);padding:10px 20px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;box-shadow:var(--shadow-clay)}
 .btn-deploy:hover{background:var(--clay-h);box-shadow:0 6px 22px rgba(226,111,74,0.5);transform:translateY(-1px)}
-.btn-submit{width:100%;background:var(--clay);border:none;color:var(--on-clay);padding:12px;border-radius:10px;font-size:13.5px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .18s;box-shadow:var(--shadow-clay)}
+.btn-submit{width:100%;background:var(--clay);border:none;color:var(--on-clay);padding:12px;border-radius:10px;font-size:13.5px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;box-shadow:var(--shadow-clay)}
 .btn-submit:hover{background:var(--clay-h);box-shadow:0 6px 22px rgba(226,111,74,0.5);transform:translateY(-1px)}
 
 /* AUTH SCREEN */
@@ -756,12 +760,12 @@ header.top{
 .auth-switch{background:transparent;border:none;color:var(--clay-ink);font-size:12.5px;font-weight:700;cursor:pointer;margin-top:12px;width:100%;font-family:inherit}
 .auth-switch:hover{text-decoration:underline}
 .tabs{display:flex;gap:4px;background:var(--card-inset);padding:4px;border-radius:10px;margin-bottom:18px;border:1px solid var(--border)}
-.tab-btn{flex:1;background:transparent;border:none;color:var(--text-3);padding:8px;border-radius:7px;font-weight:700;font-size:12.5px;cursor:pointer;transition:all .15s}
+.tab-btn{flex:1;background:transparent;border:none;color:var(--text-3);padding:8px;border-radius:7px;font-weight:700;font-size:12.5px;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s}
 .tab-btn.active{background:var(--clay);color:var(--on-clay);box-shadow:0 2px 10px rgba(226,111,74,0.35)}
 
 /* PLANS */
 .plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-.plan{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:14px;position:relative;transition:all .2s;box-shadow:var(--shadow-card)}
+.plan{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:14px;position:relative;transition:background-color .2s,border-color .2s,color .2s,box-shadow .2s,transform .2s,opacity .2s;box-shadow:var(--shadow-card)}
 .plan:hover{border-color:var(--clay-line);transform:translateY(-2px);box-shadow:0 12px 30px rgba(120,80,40,0.15), 0 0 20px rgba(226,111,74,0.12)}
 .plan.pop{border-color:var(--clay);background:linear-gradient(180deg, #FFF3EA, #FFFFFF)}
 .plan-badge{position:absolute;top:-10px;right:18px;background:var(--clay);color:var(--on-clay);font-size:10px;font-weight:900;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.6px}
@@ -774,7 +778,7 @@ header.top{
 .plan .feats{list-style:none;display:flex;flex-direction:column;gap:9px;margin:8px 0;padding:10px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 .plan .feats li{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2)}
 .plan .feats li i{color:var(--ok);font-size:12px}
-.btn-buy{background:var(--clay);border:none;color:var(--on-clay);padding:11px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:all .18s;box-shadow:var(--shadow-clay)}
+.btn-buy{background:var(--clay);border:none;color:var(--on-clay);padding:11px;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;box-shadow:var(--shadow-clay)}
 .btn-buy:hover{background:var(--clay-h);box-shadow:0 6px 20px rgba(226,111,74,0.5);transform:translateY(-1px)}
 
 /* CHECKOUT MODAL */
@@ -802,14 +806,14 @@ header.top{
 .cred-btn{background:transparent;border:none;color:var(--clay-ink);cursor:pointer;padding:2px 6px;font-size:12px}
 .cred-btn:hover{color:var(--text)}
 
-.act{background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .15s}
+.act{background:var(--card);border:1px solid var(--border);color:var(--text);padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s}
 .act:hover{background:var(--card-3);border-color:var(--clay)}
 .act.ok{color:var(--ok);border-color:rgba(46,125,79,0.35)}
 .act.ok:hover{background:rgba(46,125,79,0.10)}
 .act.danger{color:var(--red);border-color:rgba(192,53,43,0.35)}
 .act.danger:hover{background:rgba(192,53,43,0.08)}
 .act.warn{color:var(--amber);border-color:rgba(163,95,0,0.35)}
-.asub-btn{background:var(--card);border:1px solid var(--border);color:var(--text-2);padding:7px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.asub-btn{background:var(--card);border:1px solid var(--border);color:var(--text-2);padding:7px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s,opacity .15s}
 .asub-btn:hover{background:var(--clay-soft);color:var(--clay-ink);border-color:var(--clay-line)}
 .asub-btn.active{background:var(--clay);color:var(--on-clay);border-color:transparent}
 .asub{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
@@ -817,7 +821,7 @@ header.top{
 .tag{display:inline-block;background:var(--clay-soft);border:1px solid var(--clay-line);color:var(--clay-ink);font-weight:800;padding:2px 8px;border-radius:12px;font-family:var(--font-m);margin-left:4px}
 
 /* CONTACT & ORDER HISTORY (shared page styles) */
-.contact{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:var(--text);box-shadow:var(--shadow-card);transition:all .18s}
+.contact{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:var(--text);box-shadow:var(--shadow-card);transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s}
 .contact:hover{border-color:var(--clay);transform:translateY(-1px)}
 .contact .ic{width:42px;height:42px;border-radius:12px;background:var(--clay-soft);border:1px solid var(--clay-line);display:flex;align-items:center;justify-content:center;font-size:18px;color:var(--clay-ink);flex-shrink:0}
 .contact h4{font-family:var(--font-h);font-size:14.5px;font-weight:800;color:var(--text)}
@@ -865,14 +869,14 @@ button.busy{position:relative;overflow:hidden}
 .loader .spin{width:48px;height:48px;border-width:4px;box-shadow:0 0 0 7px rgba(226,111,74,.08);animation:spin .85s cubic-bezier(.5,.1,.5,.9) infinite}
 .loader-text::after{content:"";animation:dots 1.3s steps(4,end) infinite}
 @keyframes dots{0%{content:""}25%{content:"."}50%{content:".."}75%,100%{content:"..."}}
-.toast{background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:10px;box-shadow:0 8px 25px rgba(80,50,25,0.18);transition:all .2s}
+.toast{background:var(--card);border:1px solid var(--border);color:var(--text);padding:12px 18px;border-radius:10px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:10px;box-shadow:0 8px 25px rgba(80,50,25,0.18);transition:background-color .2s,border-color .2s,color .2s,box-shadow .2s,transform .2s,opacity .2s}
 .toast.success{border-color:rgba(46,125,79,0.5);color:var(--ok)}
 .toast.error{border-color:rgba(192,53,43,0.5);color:var(--red)}
 .toast.warning{border-color:rgba(163,95,0,0.5);color:var(--amber)}
 .toast.info{border-color:var(--clay-line);color:var(--clay-ink)}
 
 /* LOADER */
-.loader{position:fixed;inset:0;background:rgba(255,252,244,.88);backdrop-filter:blur(6px);z-index:4000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.loader{position:fixed;inset:0;background:rgba(255,252,244,.95);z-index:4000;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px}
 .spin{width:36px;height:36px;border:3px solid rgba(226,111,74,0.2);border-top-color:var(--clay);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loader-text{font-family:var(--font-m);font-size:13px;font-weight:800;color:var(--clay-ink);letter-spacing:1px}
@@ -906,7 +910,7 @@ button.busy{position:relative;overflow:hidden}
     z-index:2500;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;
     padding:7px;background:rgba(255,252,244,.97);border:1px solid var(--border);
     border-radius:17px;box-shadow:0 12px 36px rgba(80,50,25,.20),0 0 18px rgba(226,111,74,.10);
-    backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)
+    
   }
   .mobile-tab{min-width:0;min-height:48px;border:1px solid transparent;border-radius:11px;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
@@ -920,6 +924,23 @@ button.busy{position:relative;overflow:hidden}
   .header-actions .h-action-btn{min-height:36px}
 }
 @media(min-width:900px){.mobile-tabbar{display:none!important}}
+/* additional settings (min / stop level) */
+.adv-toggle{display:flex;align-items:center;gap:10px;margin:14px 0 6px;padding:11px 12px;border:1px dashed var(--clay-line);border-radius:12px;background:var(--clay-soft);cursor:pointer;font-size:12.5px;font-weight:800;color:var(--clay-ink);user-select:none}
+.adv-toggle input{width:18px;height:18px;accent-color:var(--clay);flex-shrink:0;cursor:pointer}
+.adv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+.adv-note{font-size:11.5px;color:var(--text-3);line-height:1.55;margin-top:2px}
+/* STOPPED / CONNECTING cards */
+.acard-pill.status.stop{background:rgba(192,53,43,0.08);color:var(--red);border-color:rgba(192,53,43,0.35)}
+.acard-pill.status.stop .dot{background:var(--red);box-shadow:none}
+.acard-btn.stopped{color:var(--text-3);border-color:var(--border);opacity:.8;cursor:not-allowed}
+.acard.is-stopped{border-color:rgba(192,53,43,0.30)}
+.acard-pending{gap:6px}
+.acard-pending.failed{border-color:rgba(192,53,43,0.45)}
+.acard-pending.failed .acard-avatar{color:var(--red);background:rgba(192,53,43,0.08);border-color:rgba(192,53,43,0.35)}
+.acard-avatar.pend{color:var(--clay)}
+.acard-avatar.pend .btn-spin{width:20px;height:20px;border-width:3px}
+.pend-msg{font-size:12px;color:var(--text-3);line-height:1.5;margin:8px 0 8px}
+.acard-actions-grid.single{grid-template-columns:1fr}
 .sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .seo-note{font-size:10.5px;line-height:1.55;color:var(--text-muted);max-width:560px;margin:10px auto 0}
 
@@ -949,7 +970,7 @@ button.busy{position:relative;overflow:hidden}
     <a class="sb-item" id="n-buy" href="#buy"><i class="fa-solid fa-bolt-lightning"></i> <span>Buy Plans</span></a>
     <a class="sb-item" id="n-history" href="#history"><i class="fa-solid fa-clock-rotate-left"></i> <span>History</span></a>
     <a class="sb-item" id="n-contact" href="#contact"><i class="fa-solid fa-paper-plane"></i> <span>Contact</span></a>
-    <a class="sb-item" id="n-admin" style="display:none;" href="#admin"><i class="fa-solid fa-shield-halved"></i> <span>Admin</span></a>
+    <!--ADMIN_HTML_START--><a class="sb-item" id="n-admin" style="display:none;" href="#admin"><i class="fa-solid fa-shield-halved"></i> <span>Admin</span></a><!--ADMIN_HTML_END-->
   </nav>
   <div class="sb-foot">
     <div class="sb-user">
@@ -959,8 +980,10 @@ button.busy{position:relative;overflow:hidden}
         <div class="sb-plan" id="ptag">Free</div>
       </div>
     </div>
+    <!--ADMIN_HTML_START-->
     <button class="sb-btn" id="admBtn" onclick="openAdminModal()"><i class="fa-solid fa-user-shield"></i> <span>Admin Login</span></button>
     <button class="sb-btn grad" id="admExit" style="display:none;" onclick="adminLogout()"><i class="fa-solid fa-shield-halved"></i> <span>Exit Admin</span></button>
+    <!--ADMIN_HTML_END-->
     <button class="sb-btn danger" onclick="doLogout()"><i class="fa-solid fa-right-from-bracket"></i> <span>Logout</span></button>
   </div>
 </aside>
@@ -1141,6 +1164,7 @@ button.busy{position:relative;overflow:hidden}
     </div>
   </main>
 
+  <!--ADMIN_HTML_START-->
   <main id="pg-admin" class="page">
     <div class="adm-badge"><i class="fa-solid fa-shield-halved"></i> Admin Panel</div>
     <section class="stats">
@@ -1157,9 +1181,11 @@ button.busy{position:relative;overflow:hidden}
     </div>
     <div id="admContent"></div>
   </main>
+  <!--ADMIN_HTML_END-->
 </div>
 
 <!-- MODALS -->
+<!--ADMIN_HTML_START-->
 <div class="modal" id="adminModal">
   <div class="mbox" style="max-width:380px;">
     <div class="mhead"><h3><i class="fa-solid fa-shield-halved" style="color:var(--clay);"></i> Admin Login</h3><button class="mclose" onclick="closeM('adminModal')"><i class="fa-solid fa-xmark"></i></button></div>
@@ -1170,6 +1196,8 @@ button.busy{position:relative;overflow:hidden}
     </form>
   </div>
 </div>
+
+<!--ADMIN_HTML_END-->
 
 <!-- INJECT NODE MODAL -->
 <div class="modal" id="injectModal">
@@ -1217,6 +1245,15 @@ button.busy{position:relative;overflow:hidden}
         </select>
       </div>
 
+      <label class="adv-toggle" for="injAdv"><input type="checkbox" id="injAdv" onchange="onAdvChange()"><span><i class="fa-solid fa-sliders"></i> Additional settings</span></label>
+      <div id="injAdvFields" style="display:none;">
+        <div class="adv-grid">
+          <div class="fg"><label class="flbl">Min level to add</label><input type="number" class="fin" id="injMinLv" inputmode="numeric" min="1" max="100" placeholder="e.g. 5" autocomplete="off"></div>
+          <div class="fg"><label class="flbl">Stop at level</label><input type="number" class="fin" id="injStopLv" inputmode="numeric" min="1" max="100" placeholder="e.g. 20" autocomplete="off"></div>
+        </div>
+        <p class="adv-note">Accounts below the min level (or already at the stop level) are not added at all. When an account reaches the stop level it goes offline and shows <b>STOPPED</b> &mdash; it is not deleted.</p>
+      </div>
+
       <div class="m-actions">
         <button type="button" class="mcancel" onclick="closeM('injectModal')">Cancel</button>
         <button type="submit" class="btn-deploy" id="btnAddAcc"><i class="fa-solid fa-rocket"></i> Deploy node</button>
@@ -1255,7 +1292,7 @@ button.busy{position:relative;overflow:hidden}
       </div>
     </div>
   <form onsubmit="submitOrder(event)">
-  <div class="fg"><label class="flbl">Your Telegram (optional)</label><input type="text" class="fin" id="coTG" placeholder="@username"></div>
+  <div class="fg"><label class="flbl">Your TG / IG username *</label><input type="text" class="fin" id="coTG" name="contact-handle-co" placeholder="@telegram or @instagram" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="40" required></div>
   <button type="submit" class="btn-submit"><i class="fa-solid fa-lock"></i> Pay Securely with ZapUPI</button>
   </form>
   </div>
@@ -1277,8 +1314,8 @@ button.busy{position:relative;overflow:hidden}
     <div id="freePlanStatusBox" style="display:none;margin-bottom:14px;"></div>
     <form onsubmit="submitFreePlanRequest(event)" id="freePlanForm">
       <div class="fg">
-        <label class="flbl">Your Telegram Username *</label>
-        <input type="text" class="fin" id="fpTg" placeholder="@yourname" required>
+        <label class="flbl">Your TG / IG Username *</label>
+        <input type="text" class="fin" id="fpTg" name="contact-handle-fp" placeholder="@telegram or @instagram" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" maxlength="40" required>
       </div>
       <div class="fg">
         <label class="flbl">Reason (optional)</label>
@@ -1343,12 +1380,13 @@ let coPlan = null;
 let planTimer = null;
 let remainSecs = 0;
 let statsTimer = null;
-let adminToken = localStorage.getItem('nxc_admin_token') || '';
-let adminExp = parseInt(localStorage.getItem('nxc_admin_exp') || '0');
+let adminToken = '';          // only ever set on the private admin page
+let adminExp = 0;
 let freePlanState = null;
 let lastAccountsSig = '';
 
 function $(id){ return document.getElementById(id); }
+function jq(s){ return esc(JSON.stringify(String(s==null?'':s))); }
 function esc(s){ if(s==null) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmt(n){ return Number(n||0).toLocaleString(); }
 function btnBusy(btn,on,label){
@@ -1363,17 +1401,16 @@ function closeM(id){ $(id).classList.remove('on'); }
 function openM(id){ $(id).classList.add('on'); }
   function copyTo(txt){ navigator.clipboard.writeText(txt).then(()=>toast('Copied','success')).catch(()=>prompt('Copy:',txt)); }
   function toggleSecret(id, btn){ const el=$(id); if(!el) return; const hidden=el.dataset.hidden==='1'; if(hidden){ el.textContent=el.dataset.value||''; el.dataset.hidden='0'; btn.innerHTML='<i class="fa-solid fa-eye-slash"></i>'; } else { el.dataset.value=el.textContent; el.textContent='••••••••••••'; el.dataset.hidden='1'; btn.innerHTML='<i class="fa-solid fa-eye"></i>'; } }
-function isAdmin(){ if(!adminToken) return false; if(adminExp && Date.now()/1000 > adminExp){ adminToken=''; adminExp=0; localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp'); return false; } return true; }
+function isAdmin(){ return !!adminToken && (!adminExp || Date.now()/1000 <= adminExp); }
 
 async function api(path, opts={}){
   const h = Object.assign({}, opts.headers||{});
-  if(path.startsWith('/api/admin/') && isAdmin()) h['X-Admin-Token']=adminToken;
-  else if(token) h['Authorization']='Bearer '+token;
+  if(!(window.__apiAuth && window.__apiAuth(path,h)) && token) h['Authorization']='Bearer '+token;
   if(opts.body && !h['Content-Type']) h['Content-Type']='application/json';
   const r = await fetch(path, Object.assign({},opts,{headers:h}));
   let d={}; try{ d=await r.json(); }catch(e){}
-  if(r.status===401 && !path.startsWith('/api/admin/')){ toast('Session expired','error'); doLogout(true); throw new Error('Unauth'); }
-  if(r.status===403 && path.startsWith('/api/admin/')){ adminToken=''; adminExp=0; localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp'); applyAdminUI(); toast('Admin session expired','error'); }
+  if(r.status===401){ toast('Session expired','error'); doLogout(true); throw new Error('Unauth'); }
+  if(window.__apiStatus) window.__apiStatus(path,r);
   return {r,d};
 }
 
@@ -1427,7 +1464,7 @@ function enterApp(){
   $('auth').style.display='none'; $('app').style.display='block';
   updateUserPill(); applyAdminUI(); fetchStats(); loadPlans(); updateFreePlanButton();
   if(statsTimer) clearInterval(statsTimer);
-  statsTimer=setInterval(fetchStats, 8000);
+  statsTimer=setInterval(()=>{ if(!document.hidden) fetchStats(); }, 8000);
   applyRoute();
 }
 
@@ -1441,6 +1478,18 @@ function updateUserPill(){
   else { tag.innerText = user.plan || 'Free'; tag.className='sb-plan'; }
 }
 
+/*PUBLIC_STUB_START*/
+function openAdminModal(){}
+function applyAdminUI(){}
+function adminLogout(){}
+function refreshFreePlanBadge(){}
+window.loadAdminSec = function(){};
+/*PUBLIC_STUB_END*/
+/*ADMIN_JS_START*/
+window.__apiAuth = function(path,h){ if(path.startsWith('/api/admin/') && isAdmin()){ h['X-Admin-Token']=adminToken; return true; } return false; };
+window.__apiStatus = function(path,r){ if((r.status===403||r.status===404) && path.startsWith('/api/admin/') && path!=='/api/admin/login'){ adminToken=''; adminExp=0; applyAdminUI(); toast('Admin session expired','error'); } };
+/* admin session lives only in this tab (cleared when the tab is closed) */
+try{ adminToken = sessionStorage.getItem('nxc_admin_token') || ''; adminExp = parseInt(sessionStorage.getItem('nxc_admin_exp') || '0'); }catch(e){}
 function openAdminModal(){ openM('adminModal'); $('adminPass').value=''; setTimeout(()=>$('adminPass').focus(),100); }
 
 async function doAdminLogin(e){
@@ -1449,11 +1498,11 @@ async function doAdminLogin(e){
   if(!p) return toast('Enter password','warning');
   setLoader(true,'VERIFYING...');
   try{
-    const r = await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+    const r = await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Entry':(window.__ADM_KEY__||'')},body:JSON.stringify({password:p})});
     const d = await r.json(); setLoader(false);
     if(d.status==='ok' && d.token){
       adminToken=d.token; adminExp=Math.floor(Date.now()/1000)+(d.expires_in||604800);
-      localStorage.setItem('nxc_admin_token',adminToken); localStorage.setItem('nxc_admin_exp',adminExp);
+      try{ sessionStorage.setItem('nxc_admin_token',adminToken); sessionStorage.setItem('nxc_admin_exp',adminExp); }catch(e){}
       toast('Admin activated!','success');
       closeM('adminModal'); applyAdminUI(); goTo('admin');
     } else toast(d.error||'Wrong password','error');
@@ -1462,7 +1511,7 @@ async function doAdminLogin(e){
 
 function adminLogout(){
   adminToken=''; adminExp=0;
-  localStorage.removeItem('nxc_admin_token'); localStorage.removeItem('nxc_admin_exp');
+  try{ sessionStorage.removeItem('nxc_admin_token'); sessionStorage.removeItem('nxc_admin_exp'); }catch(e){}
   toast('Admin disabled','info'); applyAdminUI(); goTo('home');
 }
 
@@ -1475,12 +1524,13 @@ function applyAdminUI(){
   if(adm) refreshFreePlanBadge();
 }
 
+/*ADMIN_JS_END*/
 window.goTo = function(tab){ if(window.location.hash !== '#'+tab) window.location.hash = tab; else applyRoute(); };
 
 function applyRoute(){
   let tab = (window.location.hash || '#home').slice(1);
   if(!['home','buy','history','contact','admin'].includes(tab)) tab='home';
-  if(tab==='admin' && !isAdmin()){ openAdminModal(); tab='home'; }
+  if(tab==='admin' && !isAdmin()){ tab='home'; openAdminModal(); }
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   const el=$('pg-'+tab); if(el) el.classList.add('active');
   document.querySelectorAll('.sb-item').forEach(n=>n.classList.remove('active'));
@@ -1488,19 +1538,23 @@ function applyRoute(){
   document.querySelectorAll('.mobile-tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   if(tab==='buy') loadPlans();
   if(tab==='history') loadOrders();
-  if(tab==='admin'){ loadAdminSec('orders'); refreshFreePlanBadge(); }
+  if(tab==='admin' && isAdmin()){ loadAdminSec('orders'); refreshFreePlanBadge(); }
   if(window.innerWidth < 900) document.body.classList.remove('sb-open');
   window.scrollTo(0,0);
 }
 window.addEventListener('hashchange', applyRoute);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && user) fetchStats(); });
 
 window.toggleSidebar = function(){ document.body.classList.toggle('sb-open'); };
 document.querySelectorAll('.sb-item').forEach(item=>{ item.addEventListener('click', ()=>{ if(window.innerWidth < 900) document.body.classList.remove('sb-open'); }); });
 
+let _statsBusy = false;
 async function fetchStats(){
+  if(_statsBusy) return botData;
+  _statsBusy = true;
   try{
     const {d}=await api('/api/stats');
-    if(d.status!=='ok') return;
+    if(d.status!=='ok') return null;
     botData = d;
     $('heroSlots').innerText = d.available_slots ?? 0;
     const planName = d.plan_name || (user && user.plan) || 'Free Tier';
@@ -1516,9 +1570,11 @@ async function fetchStats(){
     if($('quickAutoLabel')) $('quickAutoLabel').innerText = `AUTO ${d.total_matches ?? 0}/150`;
     if($('topTime')) $('topTime').innerText = isAdmin() ? 'Unlimited' : (d.plan_expired ? 'Expired' : (remainSecs > 0 ? `${Math.floor(remainSecs/3600)}h ${Math.floor((remainSecs%3600)/60)}m` : '0h 0m'));
 
-    const sig = JSON.stringify((d.accounts||[]).map(a => `${a.uid}|${a.level}|${a.current_exp}|${a.gained_exp}|${a.matches_played}|${a.status}|${a.is_blocked}|${a.is_paused}|${a.active_matches}|${a.mode}`));
+    const sig = JSON.stringify((d.accounts||[]).map(a => `${a.uid}|${a.level}|${a.current_exp}|${a.gained_exp}|${a.matches_played}|${a.status}|${a.is_blocked}|${a.is_paused}|${a.active_matches}|${a.mode}|${a.is_stopped}|${a.stop_level||0}|${a.pending?1:0}|${a.error||''}`));
     if(sig !== lastAccountsSig){ lastAccountsSig = sig; renderAccounts(d.accounts||[]); }
-  }catch(e){}
+    return d;
+  }catch(e){ return null; }
+  finally{ _statsBusy = false; }
 }
 
 function updatePlanTimer(secs, adm, expired){
@@ -1538,21 +1594,32 @@ function updatePlanTimer(secs, adm, expired){
   tick(); planTimer = setInterval(tick, 1000);
 }
 
-window._seenAcc = window._seenAcc || null;
-function renderAccounts(accs){
-  const box=$('accList');
-  if(window._seenAcc===null) window._seenAcc=new Set();
-  let _newIdx=0;
-  if(!accs.length){
-    box.innerHTML = `<div class="empty"><i class="fa-solid fa-ghost"></i><h3>No Accounts Connected</h3><p>Add your first FreeFire account to start leveling up.</p><button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button></div>`;
-    return;
-  }
-  let html = '';
-  for(const acc of accs){
-    const paused = acc.is_paused || acc.status === 'PAUSED';
+function pendingCardHtml(acc, uid, _anim){
+  const failed = acc.status === 'LOGIN_FAILED';
+  const expired = !!(acc.is_blocked || acc.status === 'EXPIRED');
+  const isTok = uid.startsWith('tok_');
+  const title = failed ? 'Login failed' : (expired ? 'Plan expired' : 'Connecting...');
+  const msg = failed ? (acc.error || 'Retrying...') : (expired ? 'Buy a plan to run this account.' : 'Logging in. It will be ready in a few seconds.');
+  return `<div class="card acard acard-pending${failed?' failed':''}${_anim}" id="acc-${esc(uid)}">
+    <div class="acard-profile-row">
+      <div class="acard-profile-left">
+        <div class="acard-avatar pend">${failed ? '<i class="fa-solid fa-triangle-exclamation"></i>' : '<span class="btn-spin"></span>'}</div>
+        <div class="acard-user-meta"><div class="acard-nickname">${title}</div><div class="acard-uid-line"><span>${isTok ? 'Access token login' : 'UID: ' + esc(uid)}</span></div></div>
+      </div>
+      <div class="acard-lvl-pill">${failed ? 'FAILED' : 'WAIT'}</div>
+    </div>
+    <p class="pend-msg">${esc(msg)}</p>
+    <div class="acard-actions-grid single"><button class="acard-btn delete" data-act="delete" data-uid="${esc(uid)}"><i class="fa-solid fa-trash"></i> REMOVE</button></div>
+  </div>`;
+}
+
+function accCardHtml(acc, _anim){
+    const stopped = !!(acc.is_stopped || acc.status === 'STOPPED') && !(acc.is_blocked || acc.status === 'EXPIRED');
+    const paused = !stopped && (acc.is_paused || acc.status === 'PAUSED');
     const inMatch = acc.status === 'IN_MATCH' || (acc.status && acc.status.startsWith('IN_MATCH'));
     let stCls='online', stTxt='ONLINE';
     if(acc.is_blocked || acc.status === 'EXPIRED'){ stCls='pause'; stTxt='PLAN EXPIRED'; }
+    else if(acc.is_stopped || acc.status === 'STOPPED'){ stCls='stop'; stTxt='STOPPED'; }
     else if(paused){ stCls='pause'; stTxt='PAUSED'; }
     else if(inMatch){ stCls='match'; stTxt=`IN MATCH (${acc.active_matches||1})`; }
     else if(acc.status && acc.status.startsWith('SEARCHING')){ stCls='match'; stTxt=acc.status; }
@@ -1570,6 +1637,11 @@ function renderAccounts(accs){
     const matches = acc.matches_played || 0;
     const initial = (acc.nickname||'K').trim().charAt(0).toUpperCase();
     const uid = String(acc.uid || '');
+    if(acc.pending) return pendingCardHtml(acc, uid, _anim);
+    const pauseBtn = stopped
+      ? `<button class="acard-btn stopped" disabled title="Reached the stop level"><i class="fa-solid fa-flag-checkered"></i> STOPPED</button>`
+      : `<button class="acard-btn ${paused ? 'resume' : 'pause'}" data-act="pause" data-uid="${esc(uid)}" title="${paused ? 'Resume bot' : 'Pause bot'}"><i class="fa-solid ${paused ? 'fa-play' : 'fa-pause'}"></i> ${paused ? 'RESUME' : 'PAUSE'}</button>`;
+    const stopPill = acc.stop_level ? `<span class="acard-pill"><i class="fa-solid fa-flag-checkered"></i> Stop Lv.${parseInt(acc.stop_level)||0}</span>` : '';
 
     // MODE BADGE
     const rawMode = String(acc.mode || 'auto').toLowerCase();
@@ -1588,9 +1660,7 @@ function renderAccounts(accs){
     const region = esc(acc.region || 'IND').toUpperCase();
     const nickname = esc(acc.nickname || 'KRISHNA 021');
 
-    const _isNew = !window._seenAcc.has(uid); window._seenAcc.add(uid);
-    const _anim = _isNew ? ` new" style="animation-delay:${Math.min(_newIdx++,8)*55}ms` : '';
-    html += `<div class="card acard${_anim}" id="acc-${esc(uid)}">
+    return `<div class="card acard${_anim}${stopped?' is-stopped':''}" id="acc-${esc(uid)}">
       <!-- 1. Profile Row: Avatar, Nickname, UID, Level Pill -->
       <div class="acard-profile-row">
         <div class="acard-profile-left">
@@ -1599,7 +1669,7 @@ function renderAccounts(accs){
             <div class="acard-nickname">${nickname}</div>
             <div class="acard-uid-line">
               <span>UID: ${esc(uid)}</span>
-              <button class="cpy" onclick="copyTo('${esc(uid)}')" title="Copy UID"><i class="fa-solid fa-copy"></i></button>
+              <button class="cpy" data-act="copy" data-uid="${esc(uid)}" title="Copy UID"><i class="fa-solid fa-copy"></i></button>
             </div>
           </div>
         </div>
@@ -1667,13 +1737,11 @@ function renderAccounts(accs){
 
       <!-- 7. Action Buttons Bar (PAUSE, REFRESH, DELETE) -->
       <div class="acard-actions-grid">
-        <button class="acard-btn ${paused ? 'resume' : 'pause'}" onclick="togglePause('${esc(uid)}')" title="${paused ? 'Resume bot' : 'Pause bot'}">
-          <i class="fa-solid ${paused ? 'fa-play' : 'fa-pause'}"></i> ${paused ? 'RESUME' : 'PAUSE'}
-        </button>
-        <button class="acard-btn refresh" onclick="refreshAcc('${esc(uid)}')" title="Refresh account">
+        ${pauseBtn}
+        <button class="acard-btn refresh" data-act="refresh" data-uid="${esc(uid)}" title="Refresh account">
           <i class="fa-solid fa-rotate"></i> REFRESH
         </button>
-        <button class="acard-btn delete" onclick="deleteAcc('${esc(uid)}')" title="Delete account">
+        <button class="acard-btn delete" data-act="delete" data-uid="${esc(uid)}" title="Delete account">
           <i class="fa-solid fa-trash"></i> DELETE
         </button>
       </div>
@@ -1682,7 +1750,7 @@ function renderAccounts(accs){
       <div class="acard-bottom-bar">
         <div class="acard-tags-row">
           <span class="acard-pill"><i class="fa-solid fa-globe"></i> ${region}</span>
-          <span class="acard-pill"><i class="fa-solid fa-id-card"></i> ${esc(uid)}</span>
+          <span class="acard-pill"><i class="fa-solid fa-id-card"></i> ${esc(uid)}</span>${stopPill}
           <span class="acard-pill status ${stCls}"><span class="dot"></span> ${esc(stTxt)}</span>
         </div>
         <div class="acard-mode-row">
@@ -1690,15 +1758,65 @@ function renderAccounts(accs){
             <span><i class="fa-solid fa-check"></i> ${modeLabel} ${matches}/150</span>
             <i class="fa-solid fa-chevron-down" style="font-size:9px;"></i>
           </div>
-          <button class="acard-quick-refresh" onclick="refreshAcc('${esc(uid)}')">
+          <button class="acard-quick-refresh" data-act="refresh" data-uid="${esc(uid)}">
             <i class="fa-solid fa-rotate"></i> Refresh
           </button>
         </div>
       </div>
     </div>`;
-  }
-  box.innerHTML = html;
 }
+
+window._seenAcc = window._seenAcc || new Set();
+window._cards = window._cards || new Map();      // uid -> {html, el}  (only changed cards are rebuilt)
+const EMPTY_ACCOUNTS = `<div class="empty"><i class="fa-solid fa-ghost"></i><h3>No Accounts Connected</h3><p>Add your first FreeFire account to start leveling up.</p><button class="btn-primary" onclick="openAddAccount()"><i class="fa-solid fa-plus"></i> Add Account</button></div>`;
+
+function renderAccounts(accs){
+  const box = $('accList');
+  const cards = window._cards;
+  if(!accs.length){
+    box.innerHTML = EMPTY_ACCOUNTS; cards.clear();
+    return;
+  }
+  if(box.firstElementChild && !box.firstElementChild.classList.contains('acard')){ box.innerHTML = ''; cards.clear(); }
+  const tpl = document.createElement('template');
+  const seen = new Set();
+  let newIdx = 0;
+  accs.forEach((acc, i)=>{
+    const uid = String(acc.uid || '');
+    seen.add(uid);
+    const base = accCardHtml(acc, '');
+    let rec = cards.get(uid);
+    if(!rec || rec.html !== base){
+      const isNew = !window._seenAcc.has(uid);
+      window._seenAcc.add(uid);
+      const html = isNew ? accCardHtml(acc, ` new" style="animation-delay:${Math.min(newIdx++,8)*55}ms`) : base;
+      tpl.innerHTML = html.trim();
+      const el = tpl.content.firstElementChild;
+      if(rec && rec.el.parentNode === box) box.replaceChild(el, rec.el);
+      rec = {html: base, el};
+      cards.set(uid, rec);
+    }
+    const at = box.children[i];
+    if(rec.el.parentNode !== box) box.insertBefore(rec.el, at || null);
+    else if(at !== rec.el) box.insertBefore(rec.el, at);
+  });
+  for(const [uid, rec] of Array.from(cards)){
+    if(!seen.has(uid)){ rec.el.remove(); cards.delete(uid); }
+  }
+}
+
+// one click handler for all account cards (no inline JavaScript inside the card HTML)
+document.addEventListener('click', (e)=>{
+  const b = e.target.closest ? e.target.closest('#accList [data-act]') : null;
+  if(!b || b.disabled) return;
+  const uid = b.dataset.uid || '';
+  switch(b.dataset.act){
+    case 'pause': return window.togglePause(uid);
+    case 'refresh': return window.refreshAcc(uid);
+    case 'delete': return window.deleteAcc(uid);
+    case 'copy': return copyTo(uid);
+  }
+});
 
 window.togglePause = async(uid)=>{
   window._pausing = window._pausing || {};
@@ -1736,18 +1854,32 @@ window.openAddAccount = ()=>{
   $('injAuthType').value = 'guest';
   $('injUID').value = ''; $('injPWD').value = ''; $('injTOK').value = ''; $('injBulk').value = '';
   $('injMode').value = 'auto';
+  $('injAdv').checked = false; $('injMinLv').value = ''; $('injStopLv').value = ''; onAdvChange();
   $('bulkPreview').style.display = 'none';
   onAuthTypeChange();
   openM('injectModal');
   setTimeout(()=>{ try{ $('injUID').focus(); }catch(e){} },120);
 };
 
+window.onAdvChange = ()=>{ $('injAdvFields').style.display = $('injAdv').checked ? 'block' : 'none'; };
+
+// min / stop level from the "Additional settings" box ({} when the box is off). null = invalid input.
+function readLevelSettings(){
+  if(!$('injAdv').checked) return {};
+  const lo = parseInt($('injMinLv').value, 10), hi = parseInt($('injStopLv').value, 10);
+  const out = {};
+  if($('injMinLv').value.trim() !== ''){ if(!(lo>=1 && lo<=100)){ toast('Min level must be 1 - 100','warning'); shake($('injMinLv')); return null; } out.min_level = lo; }
+  if($('injStopLv').value.trim() !== ''){ if(!(hi>=1 && hi<=100)){ toast('Stop level must be 1 - 100','warning'); shake($('injStopLv')); return null; } out.stop_level = hi; }
+  if(out.min_level && out.stop_level && out.min_level >= out.stop_level){ toast('Min level must be lower than the stop level','warning'); shake($('injMinLv')); return null; }
+  return out;
+}
+
 window.onAuthTypeChange = ()=>{
   const t = $('injAuthType').value;
   $('injGuestFields').style.display = t==='guest' ? 'block' : 'none';
   $('injTokenFields').style.display = t==='token' ? 'block' : 'none';
   $('injBulkFields').style.display = t==='bulk' ? 'block' : 'none';
-  $('injModeField').style.display = t==='bulk' ? 'none' : 'block';
+  $('injModeField').style.display = 'block';          // mode can be chosen for bulk too
 };
 
 document.addEventListener('input', (e)=>{
@@ -1764,13 +1896,47 @@ document.addEventListener('input', (e)=>{
   }
 });
 
+// Keeps the loader up until the new account(s) are connected (or refused / failed), so nothing "appears later".
+async function waitForConnect(keys){
+  const out = {failed:0, waiting:0, rejected:[]};
+  if(!keys || !keys.length) return out;
+  const keySet = new Set(keys);
+  const t0 = Date.now(), maxMs = Math.min(60000, 20000 + keys.length * 900);
+  while(Date.now() - t0 < maxMs){
+    await new Promise(r=>setTimeout(r, 900));
+    const d = await fetchStats();
+    if(!d) break;
+    const pend = (d.accounts||[]).filter(a=>a.pending && keySet.has(a.uid));
+    out.waiting = pend.filter(a=>a.status === 'CONNECTING').length;
+    out.failed = pend.filter(a=>a.status === 'LOGIN_FAILED').length;
+    out.rejected = (d.rejected||[]).filter(r=>keySet.has(r.uid));
+    const finished = keys.length - out.waiting;
+    setLoader(true, keys.length > 1 ? `CONNECTING ${finished}/${keys.length}` : 'CONNECTING ACCOUNT');
+    if(out.waiting === 0) break;
+  }
+  return out;
+}
+
+function reportConnect(res, total){
+  res.rejected.slice(0,3).forEach((r,i)=>setTimeout(()=>toast(`${r.uid}: ${r.reason} - not added`,'warning'), i*350));
+  if(res.rejected.length > 3) setTimeout(()=>toast(`+${res.rejected.length-3} more accounts skipped (level rules)`,'warning'), 1100);
+  if(res.failed) toast(`${res.failed} account(s) could not log in. Check UID / password.`,'error');
+  else if(res.waiting) toast(`${res.waiting} account(s) still connecting in background...`,'info');
+  else {
+    const ok = total - res.rejected.length;
+    if(ok > 0) toast(ok === 1 ? 'Account connected' : `${ok} accounts connected`,'success');
+  }
+}
+
 window.submitAccount = async(e)=>{
   e.preventDefault();
   const btn = $('btnAddAcc');
   const authType = $('injAuthType').value;
   const mode = $('injMode').value || 'auto';
+  const lv = readLevelSettings();
+  if(lv === null) return;
   btnBusy(btn,true,'Deploying');
-
+  let keys = [], total = 0;
   try{
     if(authType === 'bulk'){
       const text = $('injBulk').value.trim();
@@ -1782,14 +1948,12 @@ window.submitAccount = async(e)=>{
         if(parts.length >= 2) accounts.push({uid: parts[0], password: parts[1], mode: mode});
       }
       if(!accounts.length){ toast('No valid accounts','warning'); btnBusy(btn,false); return; }
-      toast(`Deploying ${accounts.length} nodes...`,'info');
-      const {r,d} = await api('/api/account/bulk-add',{method:'POST',body:JSON.stringify({accounts})});
+      const {r,d} = await api('/api/account/bulk-add',{method:'POST',body:JSON.stringify(Object.assign({accounts}, lv))});
       if(r.ok && d.status==='ok'){
-        toast(`Deployed ${d.added}${d.failed?', '+d.failed+' failed':''}`, d.limit_reached ? 'warning' : 'success');
+        if(d.failed || d.limit_reached) toast(`Deployed ${d.added}${d.failed?', '+d.failed+' skipped':''}`, d.limit_reached ? 'warning' : 'info');
         if(d.limit_reached && d.message) setTimeout(()=>toast(d.message,'warning'), 600);
+        keys = d.keys || []; total = d.added || 0;
         closeM('injectModal'); $('injBulk').value=''; $('bulkPreview').style.display='none';
-        lastAccountsSig='';
-        setTimeout(fetchStats, 1000);
       } else { toast(d.error||'Failed','error'); shake(btn); }
     } else {
       let payload;
@@ -1802,17 +1966,27 @@ window.submitAccount = async(e)=>{
         if(!tok){ toast('Token required','warning'); btnBusy(btn,false); return; }
         payload={token:tok, mode};
       }
-      const {r,d}=await api('/api/account/add',{method:'POST',body:JSON.stringify(payload)});
+      const {r,d}=await api('/api/account/add',{method:'POST',body:JSON.stringify(Object.assign(payload, lv))});
       if(r.ok && d.status==='ok'){
-        toast('Node deployed','success');
+        keys = d.keys || []; total = 1;
         closeM('injectModal');
         $('injUID').value=''; $('injPWD').value=''; $('injTOK').value=''; $('injBulk').value='';
-        lastAccountsSig='';
-        setTimeout(fetchStats,700);
       } else { toast(d.error||'Failed','error'); shake(btn); }
     }
   }catch(err){ toast(err.message,'error'); }
   btnBusy(btn,false);
+  if(keys.length){
+    lastAccountsSig='';
+    setLoader(true, keys.length > 1 ? `CONNECTING 0/${keys.length}` : 'CONNECTING ACCOUNT');
+    try{
+      await fetchStats();                            // the "CONNECTING" cards show up at once
+      const res = await waitForConnect(keys);
+      setLoader(false);
+      reportConnect(res, total);
+    }catch(e){ setLoader(false); }
+    lastAccountsSig='';
+    fetchStats();
+  }
 };
 
 async function loadPlans(){ try{ const {d}=await api('/api/plans'); if(d.status==='ok'){ allPlans=(d.plans||[]).filter(p=>p.id!=='free' && Number(p.price_inr)>0); renderPlans(); } }catch(e){} }
@@ -1821,7 +1995,7 @@ function renderPlans(){
   const box=$('plansList');
   let html = '';
   if(allPlans.length){
-    html += allPlans.map(p=>`<div class="plan ${p.popular?'pop':''}">${p.badge?`<div class="plan-badge">${esc(p.badge)}</div>`:''}<div class="plan-icon"><i class="fa-solid fa-bolt"></i></div><h3>${esc(p.name)}</h3><p class="dur">${esc(p.duration_text||'')}</p><div class="price"><span class="main">₹${p.price_inr}</span><span class="alt">/ $${p.price_usd}</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>${p.slots} accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li><li><i class="fa-solid fa-circle-check"></i> <span>${esc(p.duration_text)}</span></li></ul><button class="btn-buy" onclick="buyPlan('${esc(p.id)}')"><i class="fa-solid fa-bolt"></i> Buy Now</button></div>`).join('');
+    html += allPlans.map(p=>`<div class="plan ${p.popular?'pop':''}">${p.badge?`<div class="plan-badge">${esc(p.badge)}</div>`:''}<div class="plan-icon"><i class="fa-solid fa-bolt"></i></div><h3>${esc(p.name)}</h3><p class="dur">${esc(p.duration_text||'')}</p><div class="price"><span class="main">₹${p.price_inr}</span><span class="alt">/ $${p.price_usd}</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>${p.slots} accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Full OB55 engine</span></li><li><i class="fa-solid fa-circle-check"></i> <span>${esc(p.duration_text)}</span></li></ul><button class="btn-buy" onclick="buyPlan(${jq(p.id)})"><i class="fa-solid fa-bolt"></i> Buy Now</button></div>`).join('');
   }
   html += `<div class="plan custom"><div class="plan-badge">Custom</div><div class="plan-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div><h3>Custom Plan</h3><p class="dur">Your own days &amp; slots</p><div class="price"><span class="main" style="font-size:22px">Your Choice</span></div><ul class="feats"><li><i class="fa-solid fa-circle-check"></i> <span>Any number of days</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Any number of accounts</span></li><li><i class="fa-solid fa-circle-check"></i> <span>Special price on bulk / reseller</span></li></ul><a class="btn-buy" href="https://t.me/Brexxee" target="_blank" rel="noopener" style="text-decoration:none"><i class="fa-brands fa-telegram"></i> Contact on Telegram</a></div>`;
   box.innerHTML = html;
@@ -1833,7 +2007,7 @@ window.buyPlan = (id)=>{
   coPlan = p;
   $('coName').innerText = p.name;
   $('coDetails').innerText = `${p.slots} Accounts • ${p.duration_text||''}`;
-  $('coTG').value = (user && user.username) ? '@'+user.username : '';
+  $('coTG').value = '';
   setCoMethod('INR');
   openM('checkoutModal');
 };
@@ -1854,6 +2028,7 @@ window.submitOrder = async(e)=>{
   e.preventDefault();
   if(!coPlan) return;
   const tg = $('coTG').value.trim();
+  if(tg.replace(/[^A-Za-z0-9_]/g,'').length < 3){ toast('Enter your Telegram or Instagram username','warning'); shake($('coTG')); $('coTG').focus(); return; }
   try{
   const {d}=await api('/api/payments/zapupi/order',{method:'POST',body:JSON.stringify({plan_id: coPlan.id, user_telegram: tg})});
   if(d.status==='ok'){
@@ -1875,9 +2050,10 @@ async function loadOrders(){
   }catch(e){ box.innerHTML='<div class="empty"><h3>Error</h3></div>'; }
 }
 
+/*ADMIN_JS_START*/
 window.downloadCreds = function(){
   if(!isAdmin()){ openAdminModal(); return; }
-  const t = localStorage.getItem('nxc_admin_token') || '';
+  const t = adminToken || '';
   fetch('/api/admin/download-credentials', {headers:{'X-Admin-Token': t}})
     .then(r => { if(!r.ok) throw new Error('Failed'); return r.blob(); })
     .then(blob => {
@@ -1919,7 +2095,7 @@ window.loadAdminSec = async(sec,btn)=>{
     if(sec==='orders'){
       const {d} = await api('/api/admin/orders');
       const orders = d.orders||[];
-      c.innerHTML = orders.length===0 ? '<div class="empty"><h3>No Orders</h3></div>' : orders.map(o=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;font-size:13.5px;">${esc(o.username)} → ${esc(o.plan_name)} (₹${o.price_inr})</div><div style="font-size:11px;color:var(--text-3);font-family:var(--font-m);margin-top:3px;">${esc(o.id)} • ${esc(o.transaction_id)}</div></div><div style="display:flex;gap:6px;">${o.status==='pending'?`<button class="act ok" onclick="admOrderAction('${esc(o.id)}','approve')"><i class="fa-solid fa-check"></i></button><button class="act danger" onclick="admOrderAction('${esc(o.id)}','reject')"><i class="fa-solid fa-xmark"></i></button>`:`<span class="tag" style="text-transform:uppercase;font-size:10px;">${esc(o.status)}</span>`}</div></div></div>`).join('');
+      c.innerHTML = orders.length===0 ? '<div class="empty"><h3>No Orders</h3></div>' : orders.map(o=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;font-size:13.5px;">${esc(o.username)} → ${esc(o.plan_name)} (₹${o.price_inr})</div><div style="font-size:11px;color:var(--text-3);font-family:var(--font-m);margin-top:3px;">${esc(o.id)} • ${esc(o.transaction_id||'UPI')}</div><div style="font-size:12px;color:var(--clay-ink);font-weight:700;margin-top:3px;"><i class="fa-solid fa-at"></i> TG / IG: ${esc(o.user_telegram||'-')}</div></div><div style="display:flex;gap:6px;">${o.status==='pending'?`<button class="act ok" onclick="admOrderAction(${jq(o.id)},'approve')"><i class="fa-solid fa-check"></i></button><button class="act danger" onclick="admOrderAction(${jq(o.id)},'reject')"><i class="fa-solid fa-xmark"></i></button>`:`<span class="tag" style="text-transform:uppercase;font-size:10px;">${esc(o.status)}</span>`}</div></div></div>`).join('');
       const {d:ov} = await api('/api/admin/overview');
       if(ov.status==='ok'){ $('aUsers').innerText = ov.overview.total_users; $('aAccounts').innerText = ov.overview.total_active_accounts; $('aExp').innerText = '+' + fmt(ov.overview.total_gained_exp||0); }
     } else if(sec==='freeplans'){
@@ -1938,13 +2114,13 @@ window.loadAdminSec = async(sec,btn)=>{
             <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">
               <div style="min-width:0;flex:1;">
                 <div style="font-weight:800;font-size:13.5px;">${esc(r.display_name)} <span style="font-size:11px;color:var(--text-3);">@${esc(r.username)}</span></div>
-                <div style="font-size:11.5px;color:var(--text-2);font-family:var(--font-m);margin-top:4px;">Telegram: ${esc(r.telegram||'-')}</div>
+                <div style="font-size:11.5px;color:var(--text-2);font-family:var(--font-m);margin-top:4px;">TG / IG: ${esc(r.telegram||'-')}</div>
                 ${r.reason ? `<div style="font-size:11.5px;color:var(--text-2);margin-top:5px;padding:6px 9px;background:var(--card-inset);border-radius:6px;">${esc(r.reason)}</div>` : ''}
                 <div style="font-size:10.5px;color:var(--text-3);margin-top:5px;">${esc(when)}</div>
               </div>
               <div style="text-align:right;">
                 <div style="color:${statusColor};font-size:11px;font-weight:800;text-transform:uppercase;margin-bottom:6px;"><i class="fa-solid ${statusIcon}"></i> ${esc(r.status)}</div>
-                ${isPending ? `<div style="display:flex;gap:5px;"><button class="act ok" onclick="admFreePlanAction('${esc(r.id)}','approve')"><i class="fa-solid fa-check"></i></button><button class="act danger" onclick="admFreePlanAction('${esc(r.id)}','reject')"><i class="fa-solid fa-xmark"></i></button></div>` : ''}
+                ${isPending ? `<div style="display:flex;gap:5px;"><button class="act ok" onclick="admFreePlanAction(${jq(r.id)},'approve')"><i class="fa-solid fa-check"></i></button><button class="act danger" onclick="admFreePlanAction(${jq(r.id)},'reject')"><i class="fa-solid fa-xmark"></i></button></div>` : ''}
               </div>
             </div>
           </div>`;
@@ -1953,12 +2129,12 @@ window.loadAdminSec = async(sec,btn)=>{
     } else if(sec==='users'){
       const {d} = await api('/api/admin/users');
       const users = d.users||[];
-      c.innerHTML = users.length===0 ? '<div class="empty"><h3>No Users</h3></div>' : users.map(u=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;">${esc(u.username)} <span class="tag" style="font-size:10px;">${esc(u.role)}</span>${u.free_plan_claimed?' <span class="tag" style="font-size:9px;">FREE USED</span>':''}</div><div style="font-size:11.5px;margin-top:5px;">Plan: <b style="color:var(--text);">${esc(u.plan||'Free')}</b> • Slots: <b>${u.slots_used}/${u.slots}</b> • EXP: <b style="color:var(--text);">+${fmt(u.total_gained_exp||0)}</b></div></div><div style="display:flex;gap:5px;"><button class="act" onclick="admEditUser('${esc(u.id)}', ${u.slots})"><i class="fa-solid fa-pen"></i></button><button class="act danger" onclick="admDeleteUser('${esc(u.id)}','${esc(u.username)}')"><i class="fa-solid fa-trash"></i></button></div></div></div>`).join('');
+      c.innerHTML = users.length===0 ? '<div class="empty"><h3>No Users</h3></div>' : users.map(u=>`<div class="card acard" style="padding:12px;margin-bottom:10px;"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;"><div><div style="font-weight:800;">${esc(u.username)} <span class="tag" style="font-size:10px;">${esc(u.role)}</span>${u.free_plan_claimed?' <span class="tag" style="font-size:9px;">FREE USED</span>':''}</div><div style="font-size:11.5px;margin-top:5px;">Plan: <b style="color:var(--text);">${esc(u.plan||'Free')}</b> • Slots: <b>${u.slots_used}/${u.slots}</b> • EXP: <b style="color:var(--text);">+${fmt(u.total_gained_exp||0)}</b></div></div><div style="display:flex;gap:5px;"><button class="act" onclick="admEditUser(${jq(u.id)}, ${u.slots})"><i class="fa-solid fa-pen"></i></button><button class="act danger" onclick="admDeleteUser(${jq(u.id)},${jq(u.username)})"><i class="fa-solid fa-trash"></i></button></div></div></div>`).join('');
     } else if(sec==='credentials'){
       const {d} = await api('/api/admin/credentials');
       const creds = d.credentials||[];
       if(!creds.length){ c.innerHTML='<div class="empty"><h3>No Credentials</h3></div>'; return; }
-      c.innerHTML = creds.map((cr,i)=>`<div class="cred"><div class="cred-head"><h4><i class="fa-solid fa-user" style="color:var(--clay);"></i> ${esc(cr.nickname||'Unknown')}</h4><span class="tag" style="font-size:10px;">${esc(cr.status||'?')} • Lv.${cr.level||0}</span></div><div class="cred-row"><span class="cred-lbl">UID</span><span class="cred-val">${esc(cr.uid)}</span><button class="cred-btn" onclick="copyTo('${esc(cr.uid)}')"><i class="fa-solid fa-copy"></i></button></div>${cr.login_uid && cr.login_uid!==cr.uid?`<div class="cred-row"><span class="cred-lbl">Login UID</span><span class="cred-val">${esc(cr.login_uid)}</span><button class="cred-btn" onclick="copyTo('${esc(cr.login_uid)}')" aria-label="Copy login UID"><i class="fa-solid fa-copy"></i></button></div>`:''}<div class="cred-row"><span class="cred-lbl">Password</span><span class="cred-val pass secret" id="cp-${i}" data-hidden="1" data-value="${esc(cr.password||'')}">${cr.password?'••••••••••••':'—'}</span>${cr.password?`<button class="cred-btn" onclick="toggleSecret('cp-${i}',this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button><button class="cred-btn" onclick="copyTo($('cp-${i}').dataset.value)" aria-label="Copy password"><i class="fa-solid fa-copy"></i></button>`:''}</div>${cr.has_token?`<div class="cred-row"><span class="cred-lbl">Access token</span><span class="cred-val secret" id="ct-${i}" data-hidden="1" data-value="${esc(cr.token||'')}">••••••••••••</span><button class="cred-btn" onclick="toggleSecret('ct-${i}',this)" aria-label="Show token"><i class="fa-solid fa-eye"></i></button></div>`:''}<div class="cred-row"><span class="cred-lbl">Owner</span><span class="cred-val" style="font-family:var(--font-b);">${esc(cr.owner_username||'?')}</span></div><div class="cred-row"><span class="cred-lbl">Level / EXP</span><span class="cred-val" style="color:var(--text);">Lv.${cr.level||0} • ${fmt(cr.current_exp||0)} • Gained +${fmt(cr.gained_exp||0)}</span></div><div class="cred-row"><span class="cred-lbl">Updated</span><span class="cred-val" style="font-family:var(--font-b);">${cr.last_updated_at ? new Date(cr.last_updated_at*1000).toLocaleString() : '—'}</span></div></div>`).join('');
+      c.innerHTML = creds.map((cr,i)=>`<div class="cred"><div class="cred-head"><h4><i class="fa-solid fa-user" style="color:var(--clay);"></i> ${esc(cr.nickname||'Unknown')}</h4><span class="tag" style="font-size:10px;">${esc(cr.status||'?')} • Lv.${cr.level||0}</span></div><div class="cred-row"><span class="cred-lbl">UID</span><span class="cred-val">${esc(cr.uid)}</span><button class="cred-btn" onclick="copyTo(${jq(cr.uid)})"><i class="fa-solid fa-copy"></i></button></div>${cr.login_uid && cr.login_uid!==cr.uid?`<div class="cred-row"><span class="cred-lbl">Login UID</span><span class="cred-val">${esc(cr.login_uid)}</span><button class="cred-btn" onclick="copyTo(${jq(cr.login_uid)})" aria-label="Copy login UID"><i class="fa-solid fa-copy"></i></button></div>`:''}<div class="cred-row"><span class="cred-lbl">Password</span><span class="cred-val pass secret" id="cp-${i}" data-hidden="1" data-value="${esc(cr.password||'')}">${cr.password?'••••••••••••':'—'}</span>${cr.password?`<button class="cred-btn" onclick="toggleSecret('cp-${i}',this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button><button class="cred-btn" onclick="copyTo($('cp-${i}').dataset.value)" aria-label="Copy password"><i class="fa-solid fa-copy"></i></button>`:''}</div>${cr.has_token?`<div class="cred-row"><span class="cred-lbl">Access token</span><span class="cred-val secret" id="ct-${i}" data-hidden="1" data-value="${esc(cr.token||'')}">••••••••••••</span><button class="cred-btn" onclick="toggleSecret('ct-${i}',this)" aria-label="Show token"><i class="fa-solid fa-eye"></i></button></div>`:''}<div class="cred-row"><span class="cred-lbl">Owner</span><span class="cred-val" style="font-family:var(--font-b);">${esc(cr.owner_username||'?')}</span></div><div class="cred-row"><span class="cred-lbl">Level / EXP</span><span class="cred-val" style="color:var(--text);">Lv.${cr.level||0} • ${fmt(cr.current_exp||0)} • Gained +${fmt(cr.gained_exp||0)}</span></div><div class="cred-row"><span class="cred-lbl">Updated</span><span class="cred-val" style="font-family:var(--font-b);">${cr.last_updated_at ? new Date(cr.last_updated_at*1000).toLocaleString() : '—'}</span></div></div>`).join('');
     } else if(sec==='accounts'){
       const {d} = await api('/api/admin/accounts');
       const accs = d.accounts||[];
@@ -2003,6 +2179,8 @@ window.admDeleteUser = async(uid, uname)=>{
   }catch(e){ toast(e.message,'error'); }
 };
 
+/*ADMIN_JS_END*/
+
 async function loadFreePlanState(){
   try{ const {d} = await api('/api/free-plan/status'); if(d.status==='ok') freePlanState = d; }catch(e){}
 }
@@ -2038,7 +2216,7 @@ window.submitFreePlanRequest = async function(e){
   e.preventDefault();
   const tg = $('fpTg').value.trim();
   const reason = $('fpReason').value.trim();
-  if(!tg) return toast('Telegram required','warning');
+  if(tg.replace(/[^A-Za-z0-9_]/g,'').length < 3) return toast('Enter your Telegram or Instagram username','warning');
   const btn = $('btnFreePlanSubmit');
   btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
   try{
