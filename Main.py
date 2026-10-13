@@ -38,6 +38,7 @@ import CguFF_pb2
 import thunderFF_pb2
 
 from dashboard_server import bot_state, start_web_dashboard, user_store
+from dashboard_server import _read_accounts, _write_accounts, _entry_ids
 
 def token_key(token) -> str:
     """Stable per-token identifier built from the WHOLE token (the old code used only the first
@@ -1634,6 +1635,10 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
             try:
                 if bot_state.is_deleted(uid_str):
                     raise asyncio.CancelledError()
+                if bot_state.is_stopped(uid_str):
+                    await cancel_play_matches()
+                    print_warning(f"[STOP] UID {uid_str} reached its stop level -> going offline")
+                    return
                 if bot_state.is_paused(uid_str):
                     # paused: no gateway connection, no StartMatch, no running match
                     await cancel_play_matches()
@@ -1774,6 +1779,10 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                     if bot_state.is_deleted(uid_str):
                         print_warning(f"[DELETE] UID {uid_str} deleted -> stopping functional loop")
                         raise asyncio.CancelledError()
+                    if bot_state.is_stopped(uid_str):
+                        await cancel_play_matches()
+                        print_warning(f"[STOP] UID {uid_str} reached its stop level -> going offline")
+                        return
                     play_matches[:] = [m for m in play_matches if not m.done()]
                     active_count = await _get_match_count(uid_str)
                     try:
@@ -2109,6 +2118,13 @@ async def refresh_account_profile(account_data_or_uid: Any):
             bot_state.update_exp(acc_id, exp, level)
         except Exception as e:
             print_error(f"[EXP-REFRESH] update_exp failed for {acc_id}: {e}")
+        try:
+            stop_lv = int((bot_state.accounts.get(acc_id) or {}).get('stop_level') or 0)
+            if stop_lv and level >= stop_lv and not bot_state.is_stopped(acc_id):
+                bot_state.mark_stopped(acc_id, level)
+                print_warning(f"[STOP] UID {acc_id}: level {level} reached the stop level {stop_lv} -> stopping (not deleting)")
+        except Exception as e:
+            print_warning(f"[STOP] check failed for {acc_id}: {e}")
         if likes > 0 and acc_id in bot_state.accounts:
             try:
                 bot_state.accounts[acc_id]["likes"] = likes
@@ -2135,6 +2151,78 @@ async def refresh_account_profile(account_data_or_uid: Any):
         traceback.print_exc()
 
 
+# ==================== LEVEL RULES (min level / auto-stop level) ====================
+def _gate_level(login_key, level: int):
+    """Decide what to do with an account that just logged in.
+    'ok' = run it, 'reject' = level is outside the allowed range -> never added, 'stop' = already at its stop level."""
+    lim = bot_state.account_limits.get(str(login_key))
+    if not lim:
+        return "ok", ""
+    lo = int(lim.get("min") or 0)
+    hi = int(lim.get("stop") or 0)
+    if lim.get("accepted"):                       # accepted before (e.g. after a restart): only the stop rule matters
+        if hi and level >= hi:
+            return "stop", f"reached stop level {hi}"
+        return "ok", ""
+    if lo and level < lo:
+        return "reject", f"Level {level} is below the minimum level {lo}"
+    if hi and level >= hi:
+        return "reject", f"Level {level} has already reached the stop level {hi}"
+    return "ok", ""
+
+
+def _limit_kwargs(login_key) -> Dict:
+    lim = bot_state.account_limits.get(str(login_key)) or {}
+    return {"stop_level": int(lim.get("stop") or 0), "min_level": int(lim.get("min") or 0)}
+
+
+def _persist_accepted(login_key):
+    try:
+        entries = _read_accounts()
+        changed = False
+        for e in entries:
+            k = str(e.get("uid")) if e.get("uid") else token_key(e.get("token", ""))
+            if k == str(login_key) and not e.get("accepted"):
+                e["accepted"] = True
+                changed = True
+        if changed:
+            _write_accounts(entries)
+    except Exception as ex:
+        print_warning(f"[LEVEL] could not save accepted flag: {ex}")
+
+
+def _finish_gate(login_key, acc_id, level: int, gate: str):
+    """Called right after the account was registered."""
+    lim = bot_state.account_limits.get(str(login_key))
+    if not lim:
+        return
+    if gate == "stop":
+        bot_state.mark_stopped(acc_id, level)
+    elif not lim.get("accepted"):
+        lim["accepted"] = True
+        _persist_accepted(login_key)
+
+
+async def _reject_login(login_key, display_uid, owner_id, reason: str):
+    """The account's level is outside the allowed range: remove it completely, as if it was never added."""
+    ids = {str(login_key), str(display_uid)}
+    print_warning(f"[LEVEL] {display_uid}: {reason} -> NOT added")
+    try:
+        _write_accounts([e for e in _read_accounts() if not (_entry_ids(e) & ids)])
+    except Exception as ex:
+        print_warning(f"[LEVEL] could not clean accounts file: {ex}")
+    bot_state.mark_deleted(ids)
+    bot_state.account_workers.pop(str(login_key), None)
+    bot_state.account_limits.pop(str(login_key), None)
+    bot_state.reject_account(login_key, display_uid, owner_id, reason)
+    cb = bot_state.refresh_callbacks.get("on_account_deleted")
+    if cb:
+        try:
+            await cb(ids)
+        except Exception as ex:
+            print_warning(f"[LEVEL] cleanup failed: {ex}")
+
+
 async def process_account_uid_pass(uid: str, password: str,
                                     owner_user_id: str = "", owner_username: str = "",
                                     mode: str = "auto") -> Optional[Dict]:
@@ -2142,14 +2230,20 @@ async def process_account_uid_pass(uid: str, password: str,
     if cached:
         print_success(f"[CACHE HIT] UID {uid} loaded from token_cache.json (no login)")
         acc_id = str(cached['account_id'])
+        c_level = int(cached.get('level', 1) or 1)
+        gate, why = _gate_level(uid, c_level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
         bot_state.register_account(
             uid=acc_id, nickname=cached.get('nickname', f"Player_{acc_id}"),
-            region=cached.get('region', 'ID'), level=cached.get('level', 1),
+            region=cached.get('region', 'ID'), level=c_level,
             exp=cached.get('exp', 0), likes=cached.get('likes', 0),
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(uid)
         )
         _register_credentials(cached)
-        return cached
+        _finish_gate(uid, acc_id, c_level, gate)
+        return dict(cached, _gate="stop") if gate == "stop" else cached
     print_info(f"[LOGIN] Full login for UID {uid}...")
     try:
         verconfig_res = await version_config()
@@ -2182,9 +2276,13 @@ async def process_account_uid_pass(uid: str, password: str,
         likes = int(get_proto_field(dict_res, 8, 0) or 0)
         nickname = res_proto.nickname or get_proto_field(dict_res, 4, f"Player_{acc_id}")
         region = majorlogin_response.region or get_proto_field(dict_res, 3, "ID")
+        gate, why = _gate_level(uid, level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
         bot_state.register_account(
             uid=acc_id, nickname=nickname, region=region, level=level, exp=exp, likes=likes,
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(uid)
         )
         mode_label = _mode_label(mode, level)
         print_success(f"[OK] Login Success: UID {acc_id} | {nickname} | Lvl {level} | Mode: {mode_label}")
@@ -2203,7 +2301,8 @@ async def process_account_uid_pass(uid: str, password: str,
         }
         _register_credentials(account_data)
         cache_set(uid, account_data)
-        return account_data
+        _finish_gate(uid, acc_id, level, gate)
+        return dict(account_data, _gate="stop") if gate == "stop" else account_data
     except Exception as e:
         print_error(f"process_account_uid_pass error: {e}")
         traceback.print_exc()
@@ -2218,14 +2317,20 @@ async def process_account_token(access_token: str,
     if cached:
         print_success(f"[CACHE HIT] Token {access_token[:10]}... loaded from cache")
         acc_id = str(cached['account_id'])
+        c_level = int(cached.get('level', 1) or 1)
+        gate, why = _gate_level(cache_key, c_level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
         bot_state.register_account(
             uid=acc_id, nickname=cached.get('nickname', f"Player_{acc_id}"),
-            region=cached.get('region', 'ID'), level=cached.get('level', 1),
+            region=cached.get('region', 'ID'), level=c_level,
             exp=cached.get('exp', 0), likes=cached.get('likes', 0),
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(cache_key)
         )
         _register_credentials(cached)
-        return cached
+        _finish_gate(cache_key, acc_id, c_level, gate)
+        return dict(cached, _gate="stop") if gate == "stop" else cached
     print_info("[LOGIN] Full login with Access Token...")
     try:
         verconfig_res = await version_config()
@@ -2272,9 +2377,13 @@ async def process_account_token(access_token: str,
         likes = int(get_proto_field(dict_res, 8, 0) or 0)
         nickname = res_proto.nickname or get_proto_field(dict_res, 4, f"Player_{acc_id}")
         region = majorlogin_response.region or get_proto_field(dict_res, 3, "ID")
+        gate, why = _gate_level(cache_key, level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
         bot_state.register_account(
             uid=acc_id, nickname=nickname, region=region, level=level, exp=exp, likes=likes,
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(cache_key)
         )
         mode_label = _mode_label(mode, level)
         print_success(f"[OK] Login Success (Token): UID {acc_id} | {nickname} | Lvl {level} | Mode: {mode_label}")
@@ -2293,7 +2402,8 @@ async def process_account_token(access_token: str,
         }
         _register_credentials(account_data)
         cache_set(cache_key, account_data)
-        return account_data
+        _finish_gate(cache_key, acc_id, level, gate)
+        return dict(account_data, _gate="stop") if gate == "stop" else account_data
     except Exception as e:
         print_error(f"process_account_token error: {e}")
         traceback.print_exc()
@@ -2432,6 +2542,7 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto",
 async def account_loop_guest(uid: str, password: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
     fail_count = 0
+    bot_state.add_pending(uid, uid, owner_user_id, owner_username, mode)    # visible at once as "CONNECTING"
     await asyncio.sleep(random.uniform(0, 2.0))          # spread the start-up of many accounts
     while True:
         if bot_state.is_deleted(uid):
@@ -2456,10 +2567,15 @@ async def account_loop_guest(uid: str, password: str, mode: str = "auto",
             if bot_state.is_deleted(uid, (account_data or {}).get('account_id')):
                 print_warning(f"[DELETE] Guest UID {uid} deleted during login -> worker exit")
                 break
+            gate = (account_data or {}).get("_gate")
+            if gate == "reject":                         # level outside the allowed range -> never added
+                await _reject_login(uid, uid, owner_user_id, account_data.get("_reason", "Level not allowed"))
+                break
             if not account_data:
                 fail_count += 1
                 delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
                 print_error(f"Login failed for UID: {uid}. Retrying in {delay} seconds...")
+                bot_state.set_pending(uid, "LOGIN_FAILED", "Login failed. Check UID / password. Retrying...")
                 try:
                     bot_state.update_status(str(uid), "ERROR")
                 except Exception:
@@ -2467,11 +2583,19 @@ async def account_loop_guest(uid: str, password: str, mode: str = "auto",
                 await asyncio.sleep(delay + random.uniform(0, 3))
                 continue
             fail_count = 0
+            bot_state.clear_pending(uid)
+            if gate == "stop":                           # restart: already at its stop level -> stays STOPPED
+                print_warning(f"[STOP] UID {uid}: stop level reached -> not running")
+                break
             await run_account_worker(account_data, uid, mode=mode, owner_user_id=owner_user_id)
+            if bot_state.is_stopped(account_data.get('account_id')):
+                print_warning(f"[STOP] UID {uid}: stop level reached -> worker finished (account kept, status STOPPED)")
+                break
             print_warning(f"Session finished for {uid}. Reconnecting in 3s...")
             await asyncio.sleep(3)
         except asyncio.CancelledError:
             print_warning(f"Worker for {uid} stopped.")
+            bot_state.clear_pending(uid)
             try:
                 bot_state.update_status(str(uid), "OFFLINE")
             except Exception:
@@ -2486,6 +2610,7 @@ async def account_loop_token(token: str, mode: str = "auto",
                               owner_user_id: str = "", owner_username: str = ""):
     token_label = token_key(token)
     fail_count = 0
+    bot_state.add_pending(token_label, token_label, owner_user_id, owner_username, mode)
     await asyncio.sleep(random.uniform(0, 2.0))
     while True:
         if bot_state.is_deleted(token, token_label):
@@ -2506,19 +2631,32 @@ async def account_loop_token(token: str, mode: str = "auto",
             if bot_state.is_deleted(token, token_label, (account_data or {}).get('account_id')):
                 print_warning(f"[DELETE] Token {token_label} deleted during login -> worker exit")
                 break
+            gate = (account_data or {}).get("_gate")
+            if gate == "reject":
+                await _reject_login(token_label, token_label, owner_user_id, account_data.get("_reason", "Level not allowed"))
+                break
             if not account_data:
                 fail_count += 1
                 delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
                 print_error(f"Login failed for Token. Retrying in {delay} seconds...")
+                bot_state.set_pending(token_label, "LOGIN_FAILED", "Login failed. Token may be expired. Retrying...")
                 await asyncio.sleep(delay + random.uniform(0, 3))
                 continue
             fail_count = 0
+            bot_state.clear_pending(token_label)
             acc_id = str(account_data['account_id'])
+            if gate == "stop":
+                print_warning(f"[STOP] UID {acc_id}: stop level reached -> not running")
+                break
             await run_account_worker(account_data, acc_id, mode=mode, owner_user_id=owner_user_id)
+            if bot_state.is_stopped(acc_id):
+                print_warning(f"[STOP] UID {acc_id}: stop level reached -> worker finished (account kept, status STOPPED)")
+                break
             print_warning("Token session finished. Reconnecting in 3s...")
             await asyncio.sleep(3)
         except asyncio.CancelledError:
             print_warning(f"Worker for token {token_label} stopped.")
+            bot_state.clear_pending(token_label)
             break
         except Exception as e:
             print_error(f"Token error: {e}. Retrying in 10s...")
@@ -2637,6 +2775,11 @@ async def main():
             mode = "auto"
         owner_id = str(acc.get("owner_user_id", "") or "")
         owner_name = str(acc.get("owner_username", "") or "")
+        if acc.get("min_level") or acc.get("stop_level"):
+            _lk = token_key(acc["token"]) if acc.get("token") else str(acc.get("uid", ""))
+            bot_state.account_limits[_lk] = {"min": int(acc.get("min_level") or 0),
+                                             "stop": int(acc.get("stop_level") or 0),
+                                             "accepted": bool(acc.get("accepted"))}
         if "token" in acc and acc["token"]:
             t = asyncio.create_task(account_loop_token(
                 acc["token"], mode=mode, owner_user_id=owner_id, owner_username=owner_name
