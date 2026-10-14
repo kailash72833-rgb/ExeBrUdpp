@@ -11,6 +11,7 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.11.9
+      # REQUIRED: all accounts / orders / history are stored here (otherwise they are wiped on every deploy)
       - key: MONGODB_CONNECTION_STRING
         sync: false
       - key: MONGODB_CONNECTION_STRING_2
