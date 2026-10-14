@@ -27,6 +27,7 @@ try:
     from pymongo import MongoClient
 except ImportError:
     MongoClient = None
+from persist import store as _store            # durable storage (MongoDB + local mirror)
 
 
 # ==================== CONFIG ====================
@@ -37,7 +38,7 @@ FREE_PLAN_HOURS = 12
 FREE_PLAN_SLOTS = 3
 NEW_USER_SLOTS = 0   # brand-new users get 0 slots until they claim the free plan or buy a plan
 MAX_ACCOUNTS_PER_REQUEST = 500
-MAX_LEVEL = 100                     # highest level that can be used for min / stop level
+MAX_LEVEL = 100                     # highest level that can be used for max / stop level
 UID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")   # guest uid: letters, digits, _ . - only (blocks script injection)
 PLAN_ENFORCE_INTERVAL = 10          # seconds between plan-expiry / slot checks
 MAX_USERS_PER_IP_PER_DAY = 3        # signups from one IP per 24h (stops free-trial farming)
@@ -57,6 +58,8 @@ ACCOUNTS_FILE = os.path.join(BASE_DIR, "accounts.json")
 DEVICES_FILE = os.path.join(BASE_DIR, "devices.json")
 TOKEN_CACHE_FILE = os.path.join(BASE_DIR, "token_cache.json")
 PLANS_FILE = os.path.join(BASE_DIR, "plans.json")
+STATS_FILE = os.path.join(BASE_DIR, "account_stats.json")      # per-account EXP gained / matches (survives restarts)
+STATS_SAVE_INTERVAL = 15                                       # seconds between saves of those numbers
 PLANS_VERSION_FILE = os.path.join(BASE_DIR, "plans.version")
 
 # Plans: 1 / 3 / 10 / 20 days. Prices and slots are unchanged from the old plans.
@@ -197,6 +200,15 @@ def _save_json(path: str, data):
         print(f"[STORAGE] save failed {path}: {e}")
 
 
+def _doc_load(name: str, path: str, default):
+    """Durable document (accounts / orders / ...): MongoDB when configured, local file otherwise."""
+    return _store.load(name, path, default)
+
+
+def _doc_save(name: str, path: str, data):
+    _store.save(name, path, data)
+
+
 def _write_text_atomic(path: str, text: str):
     try:
         tmp = path + ".tmp"
@@ -250,8 +262,10 @@ class BotState:
         self.pending: Dict[str, Dict[str, Any]] = {}
         self.rejected: Dict[str, Dict[str, Any]] = {}
         self._stopped: set = set()
-        # login key (guest uid / token_key) -> {"min": int, "stop": int, "accepted": bool}
+        # login key (guest uid / token_key) -> {"max": int, "stop": int, "accepted": bool}
         self.account_limits: Dict[str, Dict[str, Any]] = {}
+        # EXP gained / matches played per game account id, restored from storage after a restart
+        self.saved_stats: Dict[str, Dict[str, Any]] = {}
 
     # ---- pending / rejected / stopped ----
     def add_pending(self, key, uid, owner_id="", owner_name="", mode="auto"):
@@ -332,23 +346,30 @@ class BotState:
     def register_account(self, uid: str, nickname: str, region: str, level: int,
                          exp: int, likes: int = 0, mode: str = "auto",
                          owner_user_id: str = "", owner_username: str = "",
-                         stop_level: int = 0, min_level: int = 0):
+                         stop_level: int = 0, max_level: int = 0):
         uid_str = str(uid)
         if self.is_deleted(uid_str):
             return
         if uid_str not in self.accounts:
+            saved = self.saved_stats.pop(uid_str, None) or {}
+            try:
+                saved_gain = max(0, int(saved.get("gained_exp", 0) or 0))
+                saved_matches = max(0, int(saved.get("matches_played", 0) or 0))
+            except (TypeError, ValueError):
+                saved_gain = saved_matches = 0
+            self.total_matches += saved_matches
             self.accounts[uid_str] = {
                 "uid": uid_str,
                 "nickname": nickname or f"Player_{uid_str[:6]}",
                 "region": region or "BD",
                 "level": level or 1,
-                "initial_exp": exp,
+                "initial_exp": exp - saved_gain,          # gained EXP carries on after a restart
                 "current_exp": exp,
-                "gained_exp": 0,
+                "gained_exp": saved_gain,
                 "likes": likes or 0,
                 "status": "ONLINE",
                 "mode": mode or "auto",
-                "matches_played": 0,
+                "matches_played": saved_matches,
                 "active_matches": 0,
                 "last_match_time": None,
                 "last_updated": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -357,7 +378,7 @@ class BotState:
                 "owner_user_id": owner_user_id,
                 "owner_username": owner_username,
                 "stop_level": int(stop_level or 0),
-                "min_level": int(min_level or 0),
+                "max_level": int(max_level or 0),
             }
         else:
             acc = self.accounts[uid_str]
@@ -372,7 +393,7 @@ class BotState:
             if owner_user_id: acc["owner_user_id"] = owner_user_id
             if owner_username: acc["owner_username"] = owner_username
             acc["stop_level"] = int(stop_level or 0)
-            acc["min_level"] = int(min_level or 0)
+            acc["max_level"] = int(max_level or 0)
             acc["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
             acc["last_updated_at"] = int(time.time())
         # a higher / removed stop level lets a stopped account run again
@@ -1032,7 +1053,7 @@ async def handle_zapupi_webhook(request: web.Request):
         if not order_id:
             return _json({"status": "ok"})
 
-        orders = _load_json(ORDERS_FILE, [])
+        orders = _doc_load("orders", ORDERS_FILE, [])
         order = next((o for o in orders if o.get("id") == order_id), None)
         if not order or order.get("status") in ("paid", "approved"):
             return _json({"status": "ok"})          # unknown order, or already handled (replay)
@@ -1063,8 +1084,9 @@ async def handle_zapupi_webhook(request: web.Request):
                     order["note"] = "paid but could not activate - approve manually"
         elif gateway_status in _GATEWAY_BAD:
             order["status"] = "failed"
-        _save_json(ORDERS_FILE, orders)
+        _doc_save("orders", ORDERS_FILE, orders)
         await user_store.flush_now()
+        await asyncio.to_thread(_store.flush, 5.0)
         return _json({"status": "ok"})
     except Exception as e:
         print(f"[WEBHOOK] error: {e}")
@@ -1119,14 +1141,14 @@ async def handle_zapupi_order(request: web.Request):
             return _json({"status": "error", "error": gateway_data.get("message") or "ZapUPI did not return payment_url"}, 502)
         # never send the gateway's raw reply (it may contain our key / signed webhook) back to the browser
         safe_gateway = {"payment_url": payment_url}
-        orders = _load_json(ORDERS_FILE, [])
+        orders = _doc_load("orders", ORDERS_FILE, [])
         orders.append({"id": order_id, "user_id": user["id"], "username": user["username"], "plan_id": plan["id"],
                        "plan_name": plan["name"], "price_inr": plan["price_inr"], "price_usd": plan.get("price_usd"),
                        "slots": plan["slots"], "duration_hours": plan["duration_hours"],
                        "payment_method": "ZapUPI", "status": "pending", "created_at": int(time.time()),
                        "user_telegram": contact,
                        "gateway": safe_gateway})
-        _save_json(ORDERS_FILE, orders)
+        _doc_save("orders", ORDERS_FILE, orders)
         return _json({"status": "ok", "order_id": order_id, "payment_url": payment_url, "gateway": safe_gateway})
     except Exception:
         return _json({"status": "error", "error": "Unable to create UPI order"}, 502)
@@ -1149,7 +1171,7 @@ async def handle_plan_order(request: web.Request):
         plan = next((p for p in load_plans() if p["id"] == plan_id), None)
         if not plan:
             return _json({"status": "error", "error": "Unknown plan"})
-        orders = _load_json(ORDERS_FILE, [])
+        orders = _doc_load("orders", ORDERS_FILE, [])
         # one payment reference can only ever be used for one order
         if any(str(o.get("transaction_id", "")).strip().lower() == txn.lower()
                and o.get("status") in ("pending", "approved", "paid") for o in orders):
@@ -1172,7 +1194,7 @@ async def handle_plan_order(request: web.Request):
             "approved_at": None,
         }
         orders.append(order)
-        _save_json(ORDERS_FILE, orders)
+        _doc_save("orders", ORDERS_FILE, orders)
         bot_state.log(f"Order {order['id']} from {user['username']} ({plan['name']})", "info")
         return _json({"status": "ok", "order_id": order["id"]})
     except Exception:
@@ -1183,7 +1205,7 @@ async def handle_my_orders(request: web.Request):
     user = _get_user(request)
     if not user:
         return _json({"status": "error", "error": "Not authenticated"}, 401)
-    orders = _load_json(ORDERS_FILE, [])
+    orders = _doc_load("orders", ORDERS_FILE, [])
     mine = [o for o in orders if o.get("user_id") == user["id"]]
     mine.sort(key=lambda o: o.get("created_at", 0), reverse=True)
     return _json({"status": "ok", "orders": mine})
@@ -1194,7 +1216,7 @@ async def handle_free_plan_status(request: web.Request):
     user = _get_user(request)
     if not user:
         return _json({"status": "error", "error": "Not authenticated"}, 401)
-    reqs = _load_json(FREE_PLAN_FILE, [])
+    reqs = _doc_load("free_plan_requests", FREE_PLAN_FILE, [])
     mine = [r for r in reqs if r.get("user_id") == user["id"]]
     pending = next((r for r in mine if r.get("status") == "pending"), None)
     approved = next((r for r in mine if r.get("status") == "approved"), None)
@@ -1232,7 +1254,7 @@ async def handle_free_plan_request(request: web.Request):
         tg_norm = _norm_tg(tg)
         if len(tg_norm) < 3:
             return _json({"status": "error", "error": "Telegram required"})
-        reqs = _load_json(FREE_PLAN_FILE, [])
+        reqs = _doc_load("free_plan_requests", FREE_PLAN_FILE, [])
         if any(r.get("user_id") == user["id"] and r.get("status") == "pending" for r in reqs):
             return _json({"status": "error", "error": "You already have a pending request"})
         # one free trial per Telegram handle (stops the same person making many accounts)
@@ -1251,20 +1273,232 @@ async def handle_free_plan_request(request: web.Request):
             "approved_at": None,
         }
         reqs.append(req)
-        _save_json(FREE_PLAN_FILE, reqs)
+        _doc_save("free_plan_requests", FREE_PLAN_FILE, reqs)
         bot_state.log(f"Free plan request from {user['username']}", "info")
         return _json({"status": "ok", "message": "Request sent to admin"})
     except Exception:
         return _json({"status": "error", "error": "Could not send request"})
 
 
+# ==================== DURABLE STATS / BACKUP ====================
+def _collect_stats() -> Dict[str, Dict[str, int]]:
+    """EXP gained + matches per game account. Accounts that have not logged in again yet keep their old numbers."""
+    data: Dict[str, Dict[str, int]] = {k: dict(v) for k, v in bot_state.saved_stats.items() if isinstance(v, dict)}
+    for uid, acc in list(bot_state.accounts.items()):
+        gained = int(acc.get("gained_exp", 0) or 0)
+        matches = int(acc.get("matches_played", 0) or 0)
+        if gained or matches:
+            data[str(uid)] = {"gained_exp": gained, "matches_played": matches}
+    return data
+
+
+def _save_stats_now():
+    _store.save("account_stats", STATS_FILE, _collect_stats(), min_interval=STATS_SAVE_INTERVAL)
+
+
+async def stats_saver():
+    while True:
+        await asyncio.sleep(STATS_SAVE_INTERVAL)
+        try:
+            _save_stats_now()
+        except Exception as e:
+            print(f"[STORAGE] stats save failed: {e}")
+
+
+def _warm_storage():
+    """Connect to MongoDB and load every document once, before the bot starts any worker."""
+    _store._ensure()
+    accounts = _read_accounts()
+    orders = _doc_load("orders", ORDERS_FILE, [])
+    reqs = _doc_load("free_plan_requests", FREE_PLAN_FILE, [])
+    stats = _doc_load("account_stats", STATS_FILE, {})
+    bot_state.saved_stats = {str(k): v for k, v in stats.items() if isinstance(v, dict)} if isinstance(stats, dict) else {}
+    print(f"[STORAGE] {_store.describe()} | accounts={len(accounts)} orders={len(orders)} "
+          f"free-plan-requests={len(reqs)} saved-stats={len(bot_state.saved_stats)}", flush=True)
+
+
+_BACKUP_FILES = ("accounts.json", "devices.json", "token_cache.json", "orders.json",
+                 "free_plan_requests.json", "account_stats.json")
+
+
+def _backup_documents() -> Dict[str, Any]:
+    return {
+        "accounts.json": _read_accounts(),
+        "devices.json": _store.load("devices", DEVICES_FILE, {}),
+        "token_cache.json": _store.load("token_cache", TOKEN_CACHE_FILE, {}),
+        "orders.json": _doc_load("orders", ORDERS_FILE, []),
+        "free_plan_requests.json": _doc_load("free_plan_requests", FREE_PLAN_FILE, []),
+        "account_stats.json": _collect_stats(),
+    }
+
+
+_RESTORE_ACC_KEYS = ("uid", "password", "token", "mode", "owner_user_id", "owner_username", "max_level", "stop_level", "accepted")
+_DEVICE_KEY_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,80}$")
+
+
+def _clean_restored_account(raw: Any) -> Optional[Dict]:
+    """Only well-formed accounts are restored (same rules as adding one by hand)."""
+    if not isinstance(raw, dict):
+        return None
+    e: Dict[str, Any] = {}
+    uid = str(raw.get("uid", "") or "").strip()
+    pwd = str(raw.get("password", "") or "").strip()
+    tok = str(raw.get("token", "") or "").strip()
+    if tok:
+        if len(tok) > 4096:
+            return None
+        e["token"] = tok
+    elif uid and pwd:
+        if not UID_RE.match(uid) or len(pwd) > 128:
+            return None
+        e["uid"], e["password"] = uid, pwd
+    else:
+        return None
+    mode = str(raw.get("mode", "auto") or "auto").strip().lower()
+    e["mode"] = mode if mode in ("auto", "br", "lw") else "auto"
+    e["owner_user_id"] = str(raw.get("owner_user_id", "") or "admin")[:64]
+    e["owner_username"] = str(raw.get("owner_username", "") or "admin")[:64]
+    for k in ("max_level", "stop_level"):
+        try:
+            n = int(raw.get(k, 0) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if 0 < n <= MAX_LEVEL:
+            e[k] = n
+    if e.get("max_level") or e.get("stop_level"):
+        e["accepted"] = bool(raw.get("accepted", True))        # it was already running -> only the stop rule applies
+    return e
+
+
+def _merge_by_id(existing: List[Dict], incoming: Any) -> tuple:
+    """Add backup records whose "id" is not stored yet. Returns (merged list, added count)."""
+    have = {str(o.get("id")) for o in existing if isinstance(o, dict)}
+    added = 0
+    merged = list(existing)
+    if isinstance(incoming, list):
+        for o in incoming:
+            if isinstance(o, dict) and isinstance(o.get("id"), str) and o["id"] and o["id"] not in have:
+                merged.append(o)
+                have.add(o["id"])
+                added += 1
+    return merged, added
+
+
+async def handle_admin_restore(request: web.Request):
+    """Re-import a backup made with "Download ZIP" (or one of the .json files inside it). Existing data is kept."""
+    if not _get_admin(request):
+        return _json({"status": "error", "error": "Admin only"}, 403)
+    try:
+        raw = await request.read()
+        files: Dict[str, bytes] = {}
+        if raw[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                total = 0
+                for info in z.infolist():
+                    base = os.path.basename(info.filename)
+                    if base in _BACKUP_FILES and not info.is_dir():
+                        total += info.file_size
+                        if info.file_size > 12 * 1024 * 1024 or total > 24 * 1024 * 1024:
+                            return _json({"status": "error", "error": "Backup file is too big"}, 413)
+                        files[base] = z.read(info)
+        else:
+            name = os.path.basename(request.headers.get("X-Backup-Name", ""))
+            if name in _BACKUP_FILES:
+                files[name] = raw
+        if not files:
+            return _json({"status": "error", "error": "Choose the ZIP from Download ZIP, or accounts.json / orders.json"})
+
+        docs: Dict[str, Any] = {}
+        for name, blob in files.items():
+            try:
+                docs[name] = json.loads(blob.decode("utf-8"))
+            except Exception:
+                return _json({"status": "error", "error": f"{name} is not valid JSON"})
+
+        result: Dict[str, Any] = {"status": "ok"}
+
+        if "accounts.json" in docs:
+            incoming = docs["accounts.json"] if isinstance(docs["accounts.json"], list) else []
+            current = _read_accounts()
+            have: set = set()
+            for a in current:
+                have |= _entry_ids(a)
+            fresh: List[Dict] = []
+            skipped = 0
+            for raw_entry in incoming:
+                entry = _clean_restored_account(raw_entry)
+                if not entry:
+                    skipped += 1
+                    continue
+                ids = _entry_ids(entry)
+                if ids & have:
+                    skipped += 1
+                    continue
+                have |= ids
+                fresh.append(entry)
+            if fresh:
+                _write_accounts(current + fresh)
+                for entry in fresh:
+                    key = token_key(entry["token"]) if entry.get("token") else entry["uid"]
+                    bot_state.undelete(*_entry_ids(entry))
+                    if entry.get("max_level") or entry.get("stop_level"):
+                        bot_state.account_limits[key] = {"max": int(entry.get("max_level", 0)), "stop": int(entry.get("stop_level", 0)),
+                                                         "accepted": bool(entry.get("accepted"))}
+                    cb = bot_state.refresh_callbacks.get("on_account_added")
+                    if cb:
+                        asyncio.create_task(cb(dict(entry)))
+            result["accounts_added"] = len(fresh)
+            result["accounts_skipped"] = skipped
+
+        if "orders.json" in docs:
+            merged, n = _merge_by_id(_doc_load("orders", ORDERS_FILE, []), docs["orders.json"])
+            if n:
+                _doc_save("orders", ORDERS_FILE, merged)
+            result["orders_added"] = n
+        if "free_plan_requests.json" in docs:
+            merged, n = _merge_by_id(_doc_load("free_plan_requests", FREE_PLAN_FILE, []), docs["free_plan_requests.json"])
+            if n:
+                _doc_save("free_plan_requests", FREE_PLAN_FILE, merged)
+            result["free_plan_requests_added"] = n
+        if "devices.json" in docs and isinstance(docs["devices.json"], dict):
+            devices = _store.load("devices", DEVICES_FILE, {})
+            n = 0
+            for k, v in docs["devices.json"].items():
+                if isinstance(v, dict) and isinstance(k, str) and _DEVICE_KEY_RE.match(k) and k not in devices:
+                    devices[k] = v
+                    n += 1
+            if n:
+                _store.save("devices", DEVICES_FILE, devices)
+            result["devices_added"] = n
+        if "account_stats.json" in docs and isinstance(docs["account_stats.json"], dict):
+            n = 0
+            for k, v in docs["account_stats.json"].items():
+                if isinstance(v, dict) and str(k) not in bot_state.accounts and str(k) not in bot_state.saved_stats:
+                    bot_state.saved_stats[str(k)] = {"gained_exp": int(v.get("gained_exp", 0) or 0),
+                                                     "matches_played": int(v.get("matches_played", 0) or 0)}
+                    n += 1
+            if n:
+                _save_stats_now()
+            result["stats_added"] = n
+
+        await asyncio.to_thread(_store.flush, 8.0)
+        bot_state.log("Backup restored by admin", "success")
+        return _json(result)
+    except Exception as e:
+        if type(e).__name__ == "HTTPRequestEntityTooLarge":
+            return _json({"status": "error", "error": "File too big (max 1 MB). Upload accounts.json or orders.json on its own."}, 413)
+        print(f"[ADMIN] restore failed: {e!r}")
+        return _json({"status": "error", "error": "Restore failed - is this the ZIP / JSON from Download ZIP?"})
+
+
 # ==================== ACCOUNT HANDLERS ====================
 def _read_accounts() -> List[Dict]:
-    return _load_json(ACCOUNTS_FILE, [])
+    data = _doc_load("accounts", ACCOUNTS_FILE, [])
+    return data if isinstance(data, list) else []
 
 
 def _write_accounts(accounts: List[Dict]):
-    _save_json(ACCOUNTS_FILE, accounts)
+    _doc_save("accounts", ACCOUNTS_FILE, accounts)
 
 
 def token_key(token) -> str:
@@ -1358,6 +1592,7 @@ async def _purge_account(ids: set):
         bot_state.pending.pop(i, None)
         bot_state.rejected.pop(i, None)
         bot_state.account_limits.pop(i, None)
+        bot_state.saved_stats.pop(i, None)
         bot_state._stopped.discard(i)
     bot_state.logs = [l for l in bot_state.logs if l.get("uid") not in ids]
     bot_state.recalc_totals()
@@ -1381,7 +1616,7 @@ def _owns_uid(user: Optional[Dict], is_admin: bool, uid: str) -> bool:
 
 
 def _parse_levels(data: Dict):
-    """(min_level, stop_level) from the request. 0 = not used. Raises ValueError with a readable message."""
+    """(max_level, stop_level) from the request. 0 = not used. Raises ValueError with a readable message."""
     def one(name: str, label: str) -> int:
         v = data.get(name, 0)
         if v in (None, "", False):
@@ -1393,23 +1628,21 @@ def _parse_levels(data: Dict):
         if n < 0 or n > MAX_LEVEL:
             raise ValueError(f"{label} must be between 1 and {MAX_LEVEL}")
         return n
-    lo = one("min_level", "Minimum level")
+    mx = one("max_level", "Max level")
     hi = one("stop_level", "Stop level")
-    if lo and hi and lo >= hi:
-        raise ValueError("Minimum level must be lower than the stop level")
-    return lo, hi
+    return mx, hi
 
 
-def _limit_fields(lo: int, hi: int) -> Dict[str, Any]:
+def _limit_fields(mx: int, hi: int) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
-    if lo or hi:
-        out = {"min_level": lo, "stop_level": hi, "accepted": False}
+    if mx or hi:
+        out = {"max_level": mx, "stop_level": hi, "accepted": False}
     return out
 
 
-def _set_limits(key: str, lo: int, hi: int):
-    if lo or hi:
-        bot_state.account_limits[str(key)] = {"min": lo, "stop": hi, "accepted": False}
+def _set_limits(key: str, mx: int, hi: int):
+    if mx or hi:
+        bot_state.account_limits[str(key)] = {"max": mx, "stop": hi, "accepted": False}
     else:
         bot_state.account_limits.pop(str(key), None)
 
@@ -1435,7 +1668,7 @@ async def handle_account_add(request: web.Request):
         owner_name = user["username"] if user else "admin"
 
         try:
-            lo, hi = _parse_levels(data)
+            mx, hi = _parse_levels(data)
         except ValueError as e:
             return _json({"status": "error", "error": str(e)})
 
@@ -1459,8 +1692,8 @@ async def handle_account_add(request: web.Request):
             bot_state.undelete(uid)
             accounts = others
             accounts.append({"uid": uid, "password": pwd, "mode": mode,
-                             "owner_user_id": owner_id, "owner_username": owner_name, **_limit_fields(lo, hi)})
-            _set_limits(uid, lo, hi)
+                             "owner_user_id": owner_id, "owner_username": owner_name, **_limit_fields(mx, hi)})
+            _set_limits(uid, mx, hi)
             bot_state.add_pending(uid, uid, owner_id, owner_name, mode)
             keys = [uid]
         elif "token" in data:
@@ -1478,9 +1711,9 @@ async def handle_account_add(request: web.Request):
             bot_state.undelete(*_token_ids(tok))
             accounts = others
             accounts.append({"token": tok, "mode": mode,
-                             "owner_user_id": owner_id, "owner_username": owner_name, **_limit_fields(lo, hi)})
+                             "owner_user_id": owner_id, "owner_username": owner_name, **_limit_fields(mx, hi)})
             tk = token_key(tok)
-            _set_limits(tk, lo, hi)
+            _set_limits(tk, mx, hi)
             bot_state.add_pending(tk, tk, owner_id, owner_name, mode)
             keys = [tk]
         else:
@@ -1521,7 +1754,7 @@ async def handle_account_bulk_add(request: web.Request):
         owner_name = user["username"] if user else "admin"
         limit = None if is_admin else _slot_limit(user)
         try:
-            lo, hi = _parse_levels(data)
+            mx, hi = _parse_levels(data)
         except ValueError as e:
             return _json({"status": "error", "error": str(e)})
 
@@ -1554,10 +1787,10 @@ async def handle_account_bulk_add(request: web.Request):
             bot_state.undelete(uid)
             accounts = others
             accounts.append({"uid": uid, "password": pwd, "mode": mode,
-                             "owner_user_id": owner_id, "owner_username": owner_name, **_limit_fields(lo, hi)})
+                             "owner_user_id": owner_id, "owner_username": owner_name, **_limit_fields(mx, hi)})
             added_items.append({"uid": uid, "password": pwd, "mode": mode,
                                 "owner_user_id": owner_id, "owner_username": owner_name})
-            _set_limits(uid, lo, hi)
+            _set_limits(uid, mx, hi)
             bot_state.add_pending(uid, uid, owner_id, owner_name, mode)
             added += 1
         _write_accounts(accounts)
@@ -1709,7 +1942,7 @@ async def handle_admin_login(request: web.Request):
 async def handle_admin_orders(request: web.Request):
     if not _get_admin(request):
         return _json({"status": "error", "error": "Admin only"}, 403)
-    orders = _load_json(ORDERS_FILE, [])
+    orders = _doc_load("orders", ORDERS_FILE, [])
     orders.sort(key=lambda o: o.get("created_at", 0), reverse=True)
     return _json({"status": "ok", "orders": orders})
 
@@ -1723,7 +1956,7 @@ async def handle_admin_orders_action(request: web.Request):
         action = str(data.get("action", "")).strip().lower()
         if action not in ("approve", "reject"):
             return _json({"status": "error", "error": "action must be approve/reject"})
-        orders = _load_json(ORDERS_FILE, [])
+        orders = _doc_load("orders", ORDERS_FILE, [])
         order = next((o for o in orders if o["id"] == order_id), None)
         if not order:
             return _json({"status": "error", "error": "Order not found"})
@@ -1739,8 +1972,9 @@ async def handle_admin_orders_action(request: web.Request):
             order["status"] = "rejected"
             bot_state.log(f"Order {order_id} rejected", "warning")
         order["approved_at"] = int(time.time())
-        _save_json(ORDERS_FILE, orders)
+        _doc_save("orders", ORDERS_FILE, orders)
         await user_store.flush_now()
+        await asyncio.to_thread(_store.flush, 5.0)
         return _json({"status": "ok", "message": f"Order {action}d"})
     except Exception as e:
         print(f"[ADMIN] action failed: {e!r}")          # details stay in the server log only
@@ -1921,7 +2155,7 @@ async def handle_admin_accounts(request: web.Request):
 async def handle_admin_free_plan_requests(request: web.Request):
     if not _get_admin(request):
         return _json({"status": "error", "error": "Admin only"}, 403)
-    reqs = _load_json(FREE_PLAN_FILE, [])
+    reqs = _doc_load("free_plan_requests", FREE_PLAN_FILE, [])
     reqs.sort(key=lambda r: r.get("created_at", 0), reverse=True)
     return _json({"status": "ok", "requests": reqs})
 
@@ -1935,7 +2169,7 @@ async def handle_admin_free_plan_action(request: web.Request):
         action = str(data.get("action", "")).strip().lower()
         if action not in ("approve", "reject"):
             return _json({"status": "error", "error": "action must be approve/reject"})
-        reqs = _load_json(FREE_PLAN_FILE, [])
+        reqs = _doc_load("free_plan_requests", FREE_PLAN_FILE, [])
         req = next((r for r in reqs if r["id"] == req_id), None)
         if not req:
             return _json({"status": "error", "error": "Request not found"})
@@ -1944,7 +2178,7 @@ async def handle_admin_free_plan_action(request: web.Request):
 
         req["status"] = "approved" if action == "approve" else "rejected"
         req["approved_at"] = int(time.time())
-        _save_json(FREE_PLAN_FILE, reqs)
+        _doc_save("free_plan_requests", FREE_PLAN_FILE, reqs)
 
         if action == "approve":
             user = user_store.find(req["username"])
@@ -1972,9 +2206,8 @@ async def handle_admin_download_credentials(request: web.Request):
         return web.Response(text="admin only", status=403)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for path in (ACCOUNTS_FILE, DEVICES_FILE, TOKEN_CACHE_FILE):
-            if os.path.exists(path):
-                z.write(path, arcname=os.path.basename(path))
+        for arcname, doc in _backup_documents().items():
+            z.writestr(arcname, json.dumps(doc, indent=2, default=str))
     buf.seek(0)
     return web.Response(
         body=buf.read(),
@@ -2110,6 +2343,7 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     if port is None:
         port = int(os.environ.get("PORT", 20333))
 
+    await asyncio.to_thread(_warm_storage)            # MongoDB + every saved document is loaded BEFORE any worker starts
     app = web.Application(client_max_size=1024 * 1024, middlewares=[security_middleware])
     r = app.router
 
@@ -2157,6 +2391,7 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     r.add_get("/api/admin/free-plan-requests", handle_admin_free_plan_requests)
     r.add_post("/api/admin/free-plan-action", handle_admin_free_plan_action)
     r.add_get("/api/admin/download-credentials", handle_admin_download_credentials)
+    r.add_post("/api/admin/restore", handle_admin_restore)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -2167,6 +2402,7 @@ async def start_web_dashboard(host: str = "0.0.0.0", port: int = None):
     bot_state._bg_tasks = [
         asyncio.create_task(plan_enforcer()),
         asyncio.create_task(user_store.flusher()),
+        asyncio.create_task(stats_saver()),
     ]
 
     print("\033[92m" + "=" * 60 + "\033[0m")
