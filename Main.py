@@ -39,6 +39,7 @@ import thunderFF_pb2
 
 from dashboard_server import bot_state, start_web_dashboard, user_store
 from dashboard_server import _read_accounts, _write_accounts, _entry_ids
+from persist import store as persist_store          # MongoDB-backed storage (survives restarts / redeploys)
 
 def token_key(token) -> str:
     """Stable per-token identifier built from the WHOLE token (the old code used only the first
@@ -97,13 +98,9 @@ FALLBACK_PASSWORD = ""
 
 # ==================== DEVICE RANDOMIZER ====================
 def get_device_for_account(account_identifier: str) -> dict:
-    devices = {}
-    if os.path.exists(DEVICES_FILE):
-        try:
-            with open(DEVICES_FILE, "r", encoding="utf-8") as f:
-                devices = json.load(f)
-        except Exception:
-            pass
+    devices = persist_store.load("devices", DEVICES_FILE, {})
+    if not isinstance(devices, dict):
+        devices = {}
     acc_key = str(account_identifier)
     if acc_key in devices:
         return devices[acc_key]
@@ -136,8 +133,7 @@ def get_device_for_account(account_identifier: str) -> dict:
     }
     devices[acc_key] = new_device
     try:
-        with open(DEVICES_FILE, "w", encoding="utf-8") as f:
-            json.dump(devices, f, indent=4)
+        persist_store.save("devices", DEVICES_FILE, devices)
     except Exception as e:
         print_error(f"Failed to save device mapping: {e}")
     return new_device
@@ -420,22 +416,14 @@ def _load_token_cache() -> Dict[str, Any]:
     if _token_cache_store is not None:
         return _token_cache_store
     cache: Dict[str, Any] = {}
-    if os.path.exists(TOKEN_CACHE_FILE):
-        try:
-            with open(TOKEN_CACHE_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-            if content:
-                data = json.loads(content)
-                if not isinstance(data, dict):
-                    raise ValueError("Cache root must be dict")
-                cache = _json_deserializer(data)
-        except Exception as e:
-            print_error(f"Token cache corrupt -> deleting: {e}")
-            cache = {}
-            try:
-                os.remove(TOKEN_CACHE_FILE)
-            except Exception:
-                pass
+    try:
+        data = persist_store.load("token_cache", TOKEN_CACHE_FILE, {})
+        if not isinstance(data, dict):
+            raise ValueError("Cache root must be dict")
+        cache = _json_deserializer(data)
+    except Exception as e:
+        print_error(f"Token cache unreadable -> starting empty: {e}")
+        cache = {}
     _token_cache_store = cache
     return cache
 
@@ -463,10 +451,8 @@ def _flush_token_cache_sync():
         _token_cache_dirty = True
         return
     try:
-        tmp_file = TOKEN_CACHE_FILE + ".tmp"
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp_file, TOKEN_CACHE_FILE)
+        # local file right away; MongoDB at most every 20 s (a lost cache only costs one re-login)
+        persist_store.save("token_cache", TOKEN_CACHE_FILE, text=text, min_interval=20.0)
     except Exception as e:
         _token_cache_dirty = True
         print_error(f"Token cache save error: {e}")
@@ -2151,21 +2137,21 @@ async def refresh_account_profile(account_data_or_uid: Any):
         traceback.print_exc()
 
 
-# ==================== LEVEL RULES (min level / auto-stop level) ====================
+# ==================== LEVEL RULES (max level to add / auto-stop level) ====================
 def _gate_level(login_key, level: int):
     """Decide what to do with an account that just logged in.
-    'ok' = run it, 'reject' = level is outside the allowed range -> never added, 'stop' = already at its stop level."""
+    'ok' = run it, 'reject' = level is above the max level to add -> never added, 'stop' = already at its stop level."""
     lim = bot_state.account_limits.get(str(login_key))
     if not lim:
         return "ok", ""
-    lo = int(lim.get("min") or 0)
+    mx = int(lim.get("max") or 0)
     hi = int(lim.get("stop") or 0)
     if lim.get("accepted"):                       # accepted before (e.g. after a restart): only the stop rule matters
         if hi and level >= hi:
             return "stop", f"reached stop level {hi}"
         return "ok", ""
-    if lo and level < lo:
-        return "reject", f"Level {level} is below the minimum level {lo}"
+    if mx and level > mx:                         # max 21 -> level 21 or lower can be added
+        return "reject", f"Level {level} is too high: max level {mx} (only level {mx} or lower can be added)"
     if hi and level >= hi:
         return "reject", f"Level {level} has already reached the stop level {hi}"
     return "ok", ""
@@ -2173,7 +2159,7 @@ def _gate_level(login_key, level: int):
 
 def _limit_kwargs(login_key) -> Dict:
     lim = bot_state.account_limits.get(str(login_key)) or {}
-    return {"stop_level": int(lim.get("stop") or 0), "min_level": int(lim.get("min") or 0)}
+    return {"stop_level": int(lim.get("stop") or 0), "max_level": int(lim.get("max") or 0)}
 
 
 def _persist_accepted(login_key):
@@ -2665,14 +2651,10 @@ async def account_loop_token(token: str, mode: str = "auto",
 
 def load_accounts():
     accounts = []
-    if os.path.exists(ACCOUNTS_FILE):
-        try:
-            with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    accounts = data
-        except Exception as e:
-            print_error(f"Could not load {ACCOUNTS_FILE}: {e}")
+    try:
+        accounts = [a for a in _read_accounts() if isinstance(a, dict)]       # MongoDB (or local file when no MongoDB)
+    except Exception as e:
+        print_error(f"Could not load accounts: {e}")
     if not accounts and FALLBACK_UID and FALLBACK_PASSWORD:
         accounts.append({"uid": FALLBACK_UID, "password": FALLBACK_PASSWORD})
     return accounts
@@ -2746,16 +2728,13 @@ async def main():
         for key in list(_load_token_cache().keys()):
             if key in ids:
                 cache_invalidate(key)
-        if os.path.exists(DEVICES_FILE):
-            try:
-                with open(DEVICES_FILE, "r", encoding="utf-8") as f:
-                    devices = json.load(f)
-                remaining = {k: v for k, v in devices.items() if k not in ids}
-                if len(remaining) != len(devices):
-                    with open(DEVICES_FILE, "w", encoding="utf-8") as f:
-                        json.dump(remaining, f, indent=4)
-            except Exception as e:
-                print_error(f"[DELETE] devices cleanup failed: {e}")
+        try:
+            devices = persist_store.load("devices", DEVICES_FILE, {})
+            remaining = {k: v for k, v in devices.items() if k not in ids}
+            if len(remaining) != len(devices):
+                persist_store.save("devices", DEVICES_FILE, remaining)
+        except Exception as e:
+            print_error(f"[DELETE] devices cleanup failed: {e}")
         async with _match_counter_lock:
             for i in ids:
                 _match_counters.pop(i, None)
@@ -2767,7 +2746,7 @@ async def main():
 
     accounts = load_accounts()
     if not accounts:
-        print_warning(f"No accounts found in {ACCOUNTS_FILE}! Add from Web Dashboard.")
+        print_warning("No accounts saved yet. Add them from the Web Dashboard.")
 
     for acc in accounts:
         mode = str(acc.get("mode", "auto")).strip().lower()
@@ -2775,9 +2754,9 @@ async def main():
             mode = "auto"
         owner_id = str(acc.get("owner_user_id", "") or "")
         owner_name = str(acc.get("owner_username", "") or "")
-        if acc.get("min_level") or acc.get("stop_level"):
+        if acc.get("max_level") or acc.get("stop_level"):
             _lk = token_key(acc["token"]) if acc.get("token") else str(acc.get("uid", ""))
-            bot_state.account_limits[_lk] = {"min": int(acc.get("min_level") or 0),
+            bot_state.account_limits[_lk] = {"max": int(acc.get("max_level") or 0),
                                              "stop": int(acc.get("stop_level") or 0),
                                              "accepted": bool(acc.get("accepted"))}
         if "token" in acc and acc["token"]:
@@ -2804,6 +2783,12 @@ async def main():
         try:
             _flush_token_cache_sync()
             await user_store.flush_now()
+            try:
+                import dashboard_server as _ds
+                _ds._save_stats_now()                       # EXP gained / matches per account
+            except Exception as e:
+                print_warning(f"[STORAGE] stats save at shutdown failed: {e}")
+            await asyncio.to_thread(persist_store.flush, 8.0)   # accounts / orders / devices -> MongoDB
         except Exception as e:
             print_error(f"Final save failed: {e}")
         print_success("All sessions cleanly closed.")
