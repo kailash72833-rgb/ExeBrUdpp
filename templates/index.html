@@ -750,6 +750,24 @@ header.top{
 .btn-submit{width:100%;background:var(--clay);border:none;color:var(--on-clay);padding:12px;border-radius:10px;font-size:13.5px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background-color .18s,border-color .18s,color .18s,box-shadow .18s,transform .18s,opacity .18s;box-shadow:var(--shadow-clay)}
 .btn-submit:hover{background:var(--clay-h);box-shadow:0 6px 22px rgba(226,111,74,0.5);transform:translateY(-1px)}
 
+/* update popup (login screen + home page) */
+.ann{z-index:2200}
+.ann-box{max-width:430px;padding:26px 22px 20px;outline:none}
+.ann-x{position:absolute;top:10px;right:10px;width:34px;height:34px;border-radius:50%;border:1px solid var(--border);background:var(--card-3);color:var(--text-2);display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;padding:0 0 3px;cursor:pointer;transition:background-color .15s,color .15s,border-color .15s}
+.ann-x:hover,.ann-x:focus-visible{background:var(--clay);border-color:var(--clay);color:var(--on-clay);outline:none}
+.ann-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(226,111,74,.14);color:var(--clay-ink);font-family:var(--font-h);font-size:11px;font-weight:800;letter-spacing:.08em;padding:5px 10px;border-radius:999px;margin-bottom:10px}
+.ann-box h3{font-family:var(--font-h);font-size:21px;font-weight:800;color:var(--text);margin:0 40px 14px 0;line-height:1.2}
+.ann-list{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:11px}
+.ann-list li{display:flex;gap:11px;align-items:flex-start;font-size:13px;line-height:1.5;color:var(--text-2)}
+.ann-list li>i{flex:0 0 30px;height:30px;border-radius:9px;background:var(--card-3);border:1px solid var(--border);color:var(--clay);display:flex;align-items:center;justify-content:center;font-size:13px;margin-top:1px}
+.ann-list b{color:var(--text)}
+.ann-tg{display:flex;align-items:center;justify-content:center;gap:9px;background:#229ED9;color:#fff;text-decoration:none;font-weight:800;font-size:14px;padding:12px 14px;border-radius:12px;box-shadow:0 6px 18px rgba(34,158,217,.32);transition:transform .15s,box-shadow .15s,background-color .15s}
+.ann-tg i{font-size:19px}
+.ann-tg span{font-weight:700;opacity:.9;font-size:12.5px}
+.ann-tg:hover,.ann-tg:focus-visible{background:#1b8cc2;transform:translateY(-1px);box-shadow:0 8px 22px rgba(34,158,217,.42);outline:none}
+.ann-note{margin:10px 0 0;text-align:center;font-size:11.5px;color:var(--text-3)}
+@media(max-width:520px){.ann-box{padding:24px 16px 16px}.ann-box h3{font-size:19px}}
+
 /* AUTH SCREEN */
 .auth{position:fixed;inset:0;background:var(--bg);background-image:radial-gradient(ellipse 80% 50% at 50% -10%, rgba(226,111,74,0.16), transparent 70%);z-index:1500;display:flex;align-items:center;justify-content:center;padding:16px}
 .auth-box{width:100%;max-width:400px;background:var(--card);border:1px solid var(--border);border-radius:20px;padding:26px;box-shadow:var(--shadow-pop)}
@@ -924,7 +942,7 @@ button.busy{position:relative;overflow:hidden}
   .header-actions .h-action-btn{min-height:36px}
 }
 @media(min-width:900px){.mobile-tabbar{display:none!important}}
-/* additional settings (min / stop level) */
+/* additional settings (max level to add / stop level) */
 .adv-toggle{display:flex;align-items:center;gap:10px;margin:14px 0 6px;padding:11px 12px;border:1px dashed var(--clay-line);border-radius:12px;background:var(--clay-soft);cursor:pointer;font-size:12.5px;font-weight:800;color:var(--clay-ink);user-select:none}
 .adv-toggle input{width:18px;height:18px;accent-color:var(--clay);flex-shrink:0;cursor:pointer}
 .adv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
@@ -1178,6 +1196,8 @@ button.busy{position:relative;overflow:hidden}
       <button class="asub-btn" data-sec="credentials" onclick="loadAdminSec('credentials',this)"><i class="fa-solid fa-key"></i> Credentials</button>
       <button class="asub-btn" data-sec="accounts" onclick="loadAdminSec('accounts',this)"><i class="fa-solid fa-layer-group"></i> Accounts</button>
       <button class="asub-btn" onclick="downloadCreds()" style="background:var(--card-3);color:var(--text);border-color:var(--border);font-weight:700;"><i class="fa-solid fa-download"></i> Download ZIP</button>
+      <button class="asub-btn" onclick="$('restoreFile').click()" style="background:var(--card-3);color:var(--text);border-color:var(--border);font-weight:700;"><i class="fa-solid fa-upload"></i> Restore backup</button>
+      <input type="file" id="restoreFile" accept=".zip,.json,application/zip,application/json" style="display:none" onchange="restoreBackup(this)">
     </div>
     <div id="admContent"></div>
   </main>
@@ -1198,6 +1218,22 @@ button.busy{position:relative;overflow:hidden}
 </div>
 
 <!--ADMIN_HTML_END-->
+
+<!-- UPDATE POPUP (shown on the login screen and on the home page) -->
+<div class="modal ann" id="annModal" role="dialog" aria-modal="true" aria-labelledby="annTitle">
+  <div class="mbox ann-box" tabindex="-1">
+    <button type="button" class="ann-x" id="annClose" aria-label="Close" onclick="closeAnn()"><span aria-hidden="true">&times;</span></button>
+    <div class="ann-badge"><i class="fa-solid fa-bolt"></i> NEW UPDATE</div>
+    <h3 id="annTitle">What&#39;s new</h3>
+    <ul class="ann-list">
+      <li><i class="fa-solid fa-database"></i><span><b>Your accounts are safe now.</b> Everything is saved in a secure database &mdash; server restarts and updates no longer delete your accounts or your order history.</span></li>
+      <li><i class="fa-solid fa-sliders"></i><span><b>Additional settings.</b> When adding accounts (single or bulk) you can set a <b>Max level</b> to add and a <b>Stop level</b>. A stopped account stays in your list and shows STOPPED.</span></li>
+      <li><i class="fa-solid fa-gauge-high"></i><span><b>Faster &amp; smoother.</b> The dashboard loads quicker and feels lighter on phones.</span></li>
+    </ul>
+    <a class="ann-tg" href="https://t.me/BrExeee" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-telegram"></i> Join our Telegram channel <span>@BrExeee</span></a>
+    <p class="ann-note">Updates, offers and proofs are posted there first.</p>
+  </div>
+</div>
 
 <!-- INJECT NODE MODAL -->
 <div class="modal" id="injectModal">
@@ -1248,10 +1284,10 @@ button.busy{position:relative;overflow:hidden}
       <label class="adv-toggle" for="injAdv"><input type="checkbox" id="injAdv" onchange="onAdvChange()"><span><i class="fa-solid fa-sliders"></i> Additional settings</span></label>
       <div id="injAdvFields" style="display:none;">
         <div class="adv-grid">
-          <div class="fg"><label class="flbl">Min level to add</label><input type="number" class="fin" id="injMinLv" inputmode="numeric" min="1" max="100" placeholder="e.g. 5" autocomplete="off"></div>
+          <div class="fg"><label class="flbl">Max level to add</label><input type="number" class="fin" id="injMaxLv" inputmode="numeric" min="1" max="100" placeholder="e.g. 21" autocomplete="off"></div>
           <div class="fg"><label class="flbl">Stop at level</label><input type="number" class="fin" id="injStopLv" inputmode="numeric" min="1" max="100" placeholder="e.g. 20" autocomplete="off"></div>
         </div>
-        <p class="adv-note">Accounts below the min level (or already at the stop level) are not added at all. When an account reaches the stop level it goes offline and shows <b>STOPPED</b> &mdash; it is not deleted.</p>
+        <p class="adv-note">Only accounts up to the max level can be added (max 21 = level 21 or lower). A higher account (or one already at the stop level) is not added at all. When an account reaches the stop level it goes offline and shows <b>STOPPED</b> &mdash; it is not deleted.</p>
       </div>
 
       <div class="m-actions">
@@ -1399,6 +1435,27 @@ function setLoader(show, text){ const el=$('loader'); if(text) $('loader-text').
 function toast(msg, type='info'){ const c=$('toasts'); const t=document.createElement('div'); t.className='toast '+type; const ic=type==='success'?'fa-circle-check':type==='error'?'fa-triangle-exclamation':type==='warning'?'fa-bell':'fa-circle-info'; t.innerHTML=`<i class="fa-solid ${ic}"></i><span>${esc(msg)}</span>`; c.appendChild(t); while(c.children.length>4) c.firstChild.remove(); setTimeout(()=>{ t.classList.add('out'); setTimeout(()=>t.remove(),300); },3200); }
 function closeM(id){ $(id).classList.remove('on'); }
 function openM(id){ $(id).classList.add('on'); }
+
+/* ===== update popup: login screen + home page (each shown once per browser session) =====
+   Change the text in #annModal and bump ANN_VER to show a new update to everybody again. */
+const ANN_VER = 'v7';
+function annSeen(k){ try{ return sessionStorage.getItem('ann_'+ANN_VER+'_'+k)==='1'; }catch(e){ return false; } }
+let annWhere = '';
+function showAnn(where){
+  if(annSeen(where)) return;
+  setTimeout(()=>{
+    if(annSeen(where)) return;
+    const m=$('annModal'); if(!m || document.querySelector('.modal.on')) return;      // never on top of another dialog
+    annWhere=where; m.classList.add('on');
+    try{ m.querySelector('.ann-box').focus({preventScroll:true}); }catch(e){}
+  }, 350);
+}
+window.closeAnn = function(){
+  $('annModal').classList.remove('on');
+  if(annWhere){ try{ sessionStorage.setItem('ann_'+ANN_VER+'_'+annWhere,'1'); }catch(e){} }
+};
+document.addEventListener('click', e=>{ if(e.target && e.target.id==='annModal') closeAnn(); });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && $('annModal') && $('annModal').classList.contains('on')) closeAnn(); });
   function copyTo(txt){ navigator.clipboard.writeText(txt).then(()=>toast('Copied','success')).catch(()=>prompt('Copy:',txt)); }
   function toggleSecret(id, btn){ const el=$(id); if(!el) return; const hidden=el.dataset.hidden==='1'; if(hidden){ el.textContent=el.dataset.value||''; el.dataset.hidden='0'; btn.innerHTML='<i class="fa-solid fa-eye-slash"></i>'; } else { el.dataset.value=el.textContent; el.textContent='••••••••••••'; el.dataset.hidden='1'; btn.innerHTML='<i class="fa-solid fa-eye"></i>'; } }
 function isAdmin(){ return !!adminToken && (!adminExp || Date.now()/1000 <= adminExp); }
@@ -1445,19 +1502,19 @@ async function doLogout(silent){
   try{ await fetch('/api/user/logout',{method:'POST',headers:{'Authorization':'Bearer '+token}}); }catch(e){}
   token=''; user=null; localStorage.removeItem('nxc_token');
   if(!silent) toast('Logged out','info');
-  $('auth').style.display='flex'; $('app').style.display='none';
+  $('auth').style.display='flex'; $('app').style.display='none'; showAnn('login');
   if(statsTimer) clearInterval(statsTimer);
   if(planTimer) clearInterval(planTimer);
 }
 
 async function checkAuth(){
-  if(!token){ $('auth').style.display='flex'; return; }
+  if(!token){ $('auth').style.display='flex'; showAnn('login'); return; }
   try{
     const r=await fetch('/api/user/me',{headers:{'Authorization':'Bearer '+token}});
     const d=await r.json();
     if(d.status==='ok'){ user=d.user; enterApp(); }
-    else{ token=''; localStorage.removeItem('nxc_token'); $('auth').style.display='flex'; }
-  }catch(e){ $('auth').style.display='flex'; }
+    else{ token=''; localStorage.removeItem('nxc_token'); $('auth').style.display='flex'; showAnn('login'); }
+  }catch(e){ $('auth').style.display='flex'; showAnn('login'); }
 }
 
 function enterApp(){
@@ -1531,6 +1588,7 @@ function applyRoute(){
   let tab = (window.location.hash || '#home').slice(1);
   if(!['home','buy','history','contact','admin'].includes(tab)) tab='home';
   if(tab==='admin' && !isAdmin()){ tab='home'; openAdminModal(); }
+  if(tab==='home' && $('app').style.display==='block') showAnn('home');
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   const el=$('pg-'+tab); if(el) el.classList.add('active');
   document.querySelectorAll('.sb-item').forEach(n=>n.classList.remove('active'));
@@ -1854,7 +1912,7 @@ window.openAddAccount = ()=>{
   $('injAuthType').value = 'guest';
   $('injUID').value = ''; $('injPWD').value = ''; $('injTOK').value = ''; $('injBulk').value = '';
   $('injMode').value = 'auto';
-  $('injAdv').checked = false; $('injMinLv').value = ''; $('injStopLv').value = ''; onAdvChange();
+  $('injAdv').checked = false; $('injMaxLv').value = ''; $('injStopLv').value = ''; onAdvChange();
   $('bulkPreview').style.display = 'none';
   onAuthTypeChange();
   openM('injectModal');
@@ -1863,14 +1921,13 @@ window.openAddAccount = ()=>{
 
 window.onAdvChange = ()=>{ $('injAdvFields').style.display = $('injAdv').checked ? 'block' : 'none'; };
 
-// min / stop level from the "Additional settings" box ({} when the box is off). null = invalid input.
+// max-level-to-add / stop level from the "Additional settings" box ({} when the box is off). null = invalid input.
 function readLevelSettings(){
   if(!$('injAdv').checked) return {};
-  const lo = parseInt($('injMinLv').value, 10), hi = parseInt($('injStopLv').value, 10);
+  const mx = parseInt($('injMaxLv').value, 10), hi = parseInt($('injStopLv').value, 10);
   const out = {};
-  if($('injMinLv').value.trim() !== ''){ if(!(lo>=1 && lo<=100)){ toast('Min level must be 1 - 100','warning'); shake($('injMinLv')); return null; } out.min_level = lo; }
+  if($('injMaxLv').value.trim() !== ''){ if(!(mx>=1 && mx<=100)){ toast('Max level must be 1 - 100','warning'); shake($('injMaxLv')); return null; } out.max_level = mx; }
   if($('injStopLv').value.trim() !== ''){ if(!(hi>=1 && hi<=100)){ toast('Stop level must be 1 - 100','warning'); shake($('injStopLv')); return null; } out.stop_level = hi; }
-  if(out.min_level && out.stop_level && out.min_level >= out.stop_level){ toast('Min level must be lower than the stop level','warning'); shake($('injMinLv')); return null; }
   return out;
 }
 
@@ -2051,6 +2108,31 @@ async function loadOrders(){
 }
 
 /*ADMIN_JS_START*/
+window.restoreBackup = function(inp){
+  const f = inp.files && inp.files[0]; inp.value = '';
+  if(!f) return;
+  if(!isAdmin()){ openAdminModal(); return; }
+  if(f.size > 1024*1024){ toast('File too big (max 1 MB). Upload accounts.json or orders.json on its own.','error'); return; }
+  if(!confirm('Restore "'+f.name+'"? Accounts / orders that are not saved yet will be added. Existing data is kept.')) return;
+  setLoader(true,'RESTORING...');
+  fetch('/api/admin/restore', {method:'POST', headers:{'X-Admin-Token': adminToken||'', 'X-Backup-Name': f.name, 'Content-Type':'application/octet-stream'}, body:f})
+    .then(r => r.json().catch(()=>({status:'error',error:'Restore failed'})))
+    .then(d => {
+      setLoader(false);
+      if(d.status==='ok'){
+        const bits = [];
+        if(d.accounts_added!=null) bits.push(d.accounts_added+' accounts');
+        if(d.orders_added!=null) bits.push(d.orders_added+' orders');
+        if(d.free_plan_requests_added) bits.push(d.free_plan_requests_added+' free-plan requests');
+        if(d.devices_added) bits.push(d.devices_added+' devices');
+        toast('Restored: '+(bits.join(', ')||'nothing new'),'success');
+        if(d.accounts_skipped) toast(d.accounts_skipped+' accounts skipped (already there / invalid)','warning');
+        try{ fetchStats(); }catch(e){}
+        loadAdminSec('orders', document.querySelector('.asub-btn[data-sec="orders"]'));
+      } else toast(d.error||'Restore failed','error');
+    })
+    .catch(()=>{ setLoader(false); toast('Network error','error'); });
+};
 window.downloadCreds = function(){
   if(!isAdmin()){ openAdminModal(); return; }
   const t = adminToken || '';
