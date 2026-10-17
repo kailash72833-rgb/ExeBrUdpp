@@ -16,8 +16,6 @@ import traceback
 import base64
 import signal
 import hashlib
-import re
-from urllib.parse import urlparse
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -539,107 +537,49 @@ _version_state: Dict[str, Any] = {"app_version": None, "app_time": 0.0, "config"
 _version_lock = asyncio.Lock()
 
 
-VER_URL = "https://version.ggwhitehawk.com/live/ver.php"
-_VER_RE = re.compile(r"^\d{1,2}\.\d{1,3}\.\d{1,3}$")             # 1.132.11   (NOT "Varies with device")
-DEFAULT_FALLBACK_VERSIONS = ("1.132.11", "1.132.8")               # asked when the Play Store gives nothing usable
-MAX_VERSION_CANDIDATES = 4
-_warn_times: Dict[str, float] = {}
-_version_log = {"last": None}
-
-
-def _warn_limited(key: str, msg: str, every: float = 60.0):
-    """Same warning at most once per minute (no log spam when something keeps failing)."""
-    now = time.time()
-    if now - _warn_times.get(key, 0.0) >= every:
-        _warn_times[key] = now
-        print_warning(msg)
-
-
-def _env_app_versions() -> List[str]:
-    raw = os.environ.get("APP_VERSION", "") or ""
-    return [v for v in (x.strip() for x in re.split(r"[,\s;]+", raw)) if _VER_RE.match(v)]
-
-
 async def get_playstore_version():
-    """A plausible app version (x.y.z) or None. Garena answers 'code 2' (no login server) for any version it does
-    not know ('Varies with device', '2.133.11' ...), so junk from the Play Store scraper is ignored here."""
-    env = _env_app_versions()
-    if env:                                                       # APP_VERSION=1.132.11 in Railway = skip Play Store
-        return env[0]
     now = time.time()
     if _version_state["app_version"] and now - _version_state["app_time"] < VERSION_CACHE_TTL * 2:
-        return _version_state["app_version"]                      # a version Garena already accepted
+        return _version_state["app_version"]
     loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(None, lambda: play_scraper('com.dts.freefireth', lang='hi', country='id')),
             timeout=25
         )
-        version = str((result or {}).get("version") or "").strip()
-        if _VER_RE.match(version):
-            return version                                        # cached only after the version server accepts it
-        _warn_limited("ps_junk", f"[VERSION] Play Store returned {version!r} (not a game version) -> ignored, using fallbacks")
+        version = result.get("version")
+        if version:
+            _version_state["app_version"] = version
+            _version_state["app_time"] = time.time()
+            return version
     except Exception as e:
-        _warn_limited("ps_fail", f"[VERSION] Play Store lookup failed: {type(e).__name__}: {e}")
-    return _version_state["app_version"]                          # last known good (None if we never had one)
-
-
-async def _ask_version_server(version: str):
-    """-> (cfg | None, note, network_error)"""
-    url = (f"{VER_URL}?version={version}&lang=hi&device=android&channel=android"
-           "&appstore=googleplay&region=ID&whitelist_version=1.3.0&whitelist_sp_version=1.0.0")
-    try:
-        response = await client.get(url)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        return None, f"{version}: {type(e).__name__}", True
-    if not isinstance(data, dict):
-        return None, f"{version}: bad answer", False
-    if data.get("is_server_open") is False:
-        return None, f"{version}: game server closed (maintenance)", False
-    code = data.get("code")
-    server_url = data.get("server_url")
-    remote_version = data.get("remote_version")
-    latest_release_version = data.get("latest_release_version")
-    if code not in (0, "0", None) or not (server_url and remote_version and latest_release_version):
-        return None, f"{version}: code={code}", False
-    return (latest_release_version, remote_version, server_url), version, False
+        print_warning(f"[VERSION] Play Store lookup failed: {e}")
+    return _version_state["app_version"]      # last known version (None only if we never had one)
 
 
 async def _fetch_version_config():
-    """(release_version, remote_version, server_url) or None. Tries: APP_VERSION env, Play Store, last good, fallbacks."""
-    candidates: List[str] = []
-
-    def add(v):
-        v = str(v or "").strip()
-        if v and _VER_RE.match(v) and v not in candidates:
-            candidates.append(v)
-
-    for v in _env_app_versions():
-        add(v)
-    add(await get_playstore_version())
-    add(_version_state["app_version"])
-    for v in DEFAULT_FALLBACK_VERSIONS:
-        add(v)
-    notes: List[str] = []
-    for v in candidates[:MAX_VERSION_CANDIDATES]:
-        cfg, note, net_err = await _ask_version_server(v)
-        if cfg:
-            _version_state["app_version"] = v
-            _version_state["app_time"] = time.time()
-            release, remote, srv = cfg
-            line = f"[VERSION] OK app={v} remote={remote} release={release} server={srv}"
-            if line != _version_log["last"]:
-                _version_log["last"] = line
-                extra = f"  (rejected before: {' | '.join(notes)})" if notes else ""
-                (print_info if notes else print_success)(line + extra)
-            return cfg
-        notes.append(note)
-        if net_err:                                               # version server unreachable: other candidates will not help
-            break
-    _warn_limited("ver_fail", "[VERSION] version server gave no login server. Tried: " + " | ".join(notes or ["nothing"]))
-    return None
+    app_version = await get_playstore_version()
+    if not app_version:
+        return None
+    api_url = (
+        "https://version.ggwhitehawk.com/live/ver.php"
+        f"?version={app_version}"
+        "&lang=hi&device=android&channel=android"
+        "&appstore=googleplay&region=ID"
+        "&whitelist_version=1.3.0&whitelist_sp_version=1.0.0"
+    )
+    try:
+        response = await client.get(api_url)
+        response.raise_for_status()
+        data = response.json()
+        server_url = data.get("server_url")
+        remote_version = data.get("remote_version")
+        latest_release_version = data.get("latest_release_version")
+        if not server_url or not remote_version or not latest_release_version:
+            return None
+        return latest_release_version, remote_version, server_url
+    except Exception:
+        return None
 
 
 async def version_config():
@@ -661,49 +601,15 @@ async def version_config():
         return cfg       # stale answer is better than failing every login
 
 
-# ==================== NEW MAJOR LOGIN SETTINGS (2026-10) ====================
-# LOGIN_MODE (Railway variable, optional):
-#   auto   (default)  lean   = new small LoginReq payload + new headers      <- tried first
-#                     full   = old big payload + new headers
-#                     legacy = exactly the old way (old payload + old headers)
-#                     the first one that works completely is remembered and used first next time
-#   lean | full | legacy   = use only that one
-LOGIN_MODE = os.environ.get("LOGIN_MODE", "auto").strip().lower()
-if LOGIN_MODE not in ("auto", "lean", "full", "legacy"):
-    LOGIN_MODE = "auto"
-LOGIN_MODE_ORDER = ("lean", "full", "legacy")
-PLAY_VER = (os.environ.get("PLAY_VER", "1.132.1") or "1.132.1").strip()      # sent as 'PlAy_VeR' header
-LOGIN_X_GA_SV = "1789534056"                                                  # new-style 'X-Ga-Sv'
-GUEST_TOKEN_URLS = (
-    "https://ffmconnect.live.gop.garenanow.com/oauth/guest/token/grant",      # new
-    "https://100067.connect.garena.com/oauth/guest/token/grant",              # old (fallback)
-)
-TOKEN_INSPECT_URLS = (
-    "https://100067.connect.garena.com/oauth/token/inspect",
-    "https://ffmconnect.live.gop.garenanow.com/oauth/token/inspect",
-)
-LEGACY_GETLOGIN_HOST = "clientbp.ppmainecoonghj.com"                          # Host header the old code always forced
-_guest_url_pref: Dict[str, Optional[str]] = {"url": None}
-
-
-def _guest_headers(url: str) -> Dict[str, str]:
-    if "garenanow.com" in url:
-        return {
-            "User-Agent": headers["User-Agent"],
-            "Connection": "Keep-Alive",
-            "Accept-Encoding": "gzip",
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
-    return {
+async def get_access_token(uid, password):
+    url = "https://100067.connect.garena.com/oauth/guest/token/grant"
+    hdrs = {
         "Host": "100067.connect.garena.com",
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B Build/SP1A.210812.016)",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "close",
+        "Connection": "close"
     }
-
-
-async def get_access_token(uid, password):
     data = {
         "uid": uid,
         "password": password,
@@ -712,27 +618,21 @@ async def get_access_token(uid, password):
         "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
         "client_id": "100067"
     }
-    urls = list(GUEST_TOKEN_URLS)
-    pref = _guest_url_pref["url"]
-    if pref in urls:                                  # the address that worked last time goes first
-        urls.remove(pref)
-        urls.insert(0, pref)
-    for attempt in range(3):
-        for url in urls:
-            try:
-                response = await client.post(url, headers=_guest_headers(url), data=data)
-                if response.status_code == 200:
-                    response_data = response.json()
-                    open_id = response_data.get("open_id")
-                    access_token = response_data.get("access_token")
-                    platform = response_data.get("platform", 4)
-                    if open_id and access_token:
-                        _guest_url_pref["url"] = url
-                        return open_id, access_token, platform
-                elif response.status_code == 429:
-                    await asyncio.sleep(1)
-            except Exception:
-                pass
+    for attempt in range(5):
+        try:
+            response = await client.post(url, headers=hdrs, data=data)
+            if response.status_code == 200:
+                response_data = response.json()
+                open_id = response_data.get("open_id")
+                access_token = response_data.get("access_token")
+                platform = response_data.get("platform", 4)
+                if open_id and access_token:
+                    return open_id, access_token, platform
+            if response.status_code == 429:
+                await asyncio.sleep(1)
+                continue
+        except Exception:
+            pass
         await asyncio.sleep(0.5)
     return None
 
@@ -843,212 +743,59 @@ async def build_majorlogin_payload(open_id, access_token, platform, client_versi
         return None
 
 
-# ==================== MAJORLOGIN (new lean LoginReq + legacy) ====================
-def build_lean_payload(open_id, access_token, platform):
-    """New MajorLogin body (LoginReq): open_id(22) open_id_type(23) login_token(29) orign_platform_type(99), AES-CBC."""
-    plat = str(platform or 4)
-    raw = build_proto({22: str(open_id), 23: plat, 29: str(access_token), 99: plat})
-    return encrypt_api_bytes(raw)
-
-
-def _login_headers(release_version, style: str, token: Optional[str] = None) -> Dict[str, str]:
-    """style 'legacy' = headers exactly as before, 'new' = headers of the new MajorLogin."""
-    if style == "legacy":
-        h = headers.copy()
-        h["ReleaseVersion"] = str(release_version)
-    else:
-        h = {
-            "User-Agent": headers["User-Agent"],
-            "Accept": "*/*",
-            "Accept-Encoding": "deflate, gzip",
-            "X-Ga-Sv": LOGIN_X_GA_SV,
-            "Authorization": "Bearer",
-            "X-Ga": "v1 1",
-            "Releaseversion": str(release_version),
-            "Content-Type": "application/x-www-form-urlencoded",
-            "X-Unity-Version": "2018.4.12f1",
-            "PlAy_VeR": PLAY_VER,
-            "Ob_VeR": str(release_version),
-        }
-    if token:
-        h["Authorization"] = f"Bearer {token}"
-    return h
-
-
-def _pb_varint(buf, i):
-    n = shift = 0
-    while True:
-        b = buf[i]                                   # IndexError = cut-off data -> caught by the caller
-        i += 1
-        n |= (b & 0x7F) << shift
-        if not b & 0x80:
-            return n, i
-        shift += 7
-        if shift > 70:
-            raise ValueError("varint too long")
-
-
-def _pb_fields(buf) -> Dict[int, list]:
-    """Strict protobuf wire reader: {field_number: [values]}  (varint -> int, everything else -> bytes)."""
-    out: Dict[int, list] = {}
-    i, n = 0, len(buf)
-    while i < n:
-        tag, i = _pb_varint(buf, i)
-        fno, wt = tag >> 3, tag & 7
-        if fno == 0:
-            raise ValueError("field 0")
-        if wt == 0:
-            v, i = _pb_varint(buf, i)
-        elif wt == 2:
-            ln, i = _pb_varint(buf, i)
-            if i + ln > n:
-                raise ValueError("cut off")
-            v = bytes(buf[i:i + ln])
-            i += ln
-        elif wt == 1:
-            if i + 8 > n:
-                raise ValueError("cut off")
-            v = bytes(buf[i:i + 8])
-            i += 8
-        elif wt == 5:
-            if i + 4 > n:
-                raise ValueError("cut off")
-            v = bytes(buf[i:i + 4])
-            i += 4
-        else:
-            raise ValueError("wire type")
-        out.setdefault(fno, []).append(v)
-    return out
-
-
-class _LoginRes:
-    """MajorLogin answer. Old (MajorLoginRes) and new (LoginRes) names share the same field numbers:
-    1 account_id | 2 region | 8 token | 10 url (server_url) | 21 server_time | 22 aes_ak | 23 iv_i"""
-    account_id = 0
-    region = ""
-    token = ""
-    url = ""
-    ttl = 0
-    server_time = 0
-    aes_ak = b""
-    iv_i = b""
-    field_ids: List[int] = []
-
-
-def _try_login_res(raw) -> Optional[_LoginRes]:
-    try:
-        f = _pb_fields(raw)
-        acc = f.get(1, [None])[-1]               # protobuf rule: if a field repeats, the last value wins
-        tok = f.get(8, [None])[-1]
-        if not isinstance(acc, int) or acc <= 0 or not isinstance(tok, bytes) or not tok:
-            return None
-
-        def s(no):
-            v = f.get(no, [None])[-1]
-            return v.decode("utf-8", "replace") if isinstance(v, bytes) else ""
-
-        def i(no):
-            v = f.get(no, [0])[-1]
-            return v if isinstance(v, int) else 0
-
-        def b(no):
-            v = f.get(no, [None])[-1]
-            return v if isinstance(v, bytes) else b""
-
-        res = _LoginRes()
-        res.account_id = acc
-        res.region = s(2) or s(3)                    # lock_region, else noti_region
-        res.token = tok.decode("utf-8", "replace")
-        res.url = s(10)
-        res.ttl = i(9)
-        res.server_time = i(21)
-        res.aes_ak = b(22)
-        res.iv_i = b(23)
-        res.field_ids = sorted(f.keys())
-        return res
-    except Exception:
-        return None
-
-
-def parse_login_response(raw: bytes) -> Optional[_LoginRes]:
-    """Reads the MajorLogin answer; also copes with a few junk bytes in front of it."""
-    res = _try_login_res(raw)
-    if res:
-        return res
-    for i in range(1, min(len(raw), 256)):
-        if raw[i] == 0x08:                           # tag of field 1 (account_id)
-            res = _try_login_res(raw[i:])
-            if res:
-                return res
-    return None
-
-
-async def send_majorlogin(data, release_version, server_url, style="legacy"):
-    tag = f"[MAJORLOGIN/{style}]"
+async def send_majorlogin(data, release_version, server_url):
     try:
         url = f"{server_url}MajorLogin" if server_url.endswith('/') else f"{server_url}/MajorLogin"
-        response = await client.post(url, headers=_login_headers(release_version, style), data=data)
-    except Exception as e:
-        print_error(f"{tag} connection error: {type(e).__name__}: {e}")
-        return None
-    if response.status_code != 200:
+        req_headers = headers.copy()
+        req_headers["ReleaseVersion"] = str(release_version)
+        response = await client.post(url, headers=req_headers, data=data)
+        if response.status_code != 200:
+            print_error(f"[MAJORLOGIN] Server rejected payload with status {response.status_code}")
+            return None
+        response_content = response.content
+        if len(response_content) < 40:
+            return None
+        res_proto = thunderFF_pb2.MajorLoginRes()
         try:
-            body = (response.text or "")[:80].replace("\n", " ")
+            res_proto.ParseFromString(response_content)
+            if res_proto.region and res_proto.token:
+                return res_proto
         except Exception:
-            body = ""
-        print_error(f"{tag} server rejected payload: HTTP {response.status_code} {body!r}")
-        return None
-    content = response.content
-    res = parse_login_response(content)
-    if res is None:
-        print_error(f"{tag} answer could not be read ({len(content)} bytes, starts {content[:12].hex()})")
-        return None
-    return res
-
-
-_getlogin_seen_hosts = set()
-
-
-async def send_getlogin(data, base_url, token, release_version, style="legacy"):
-    try:
-        base = str(base_url or "").rstrip("/")
-        url = f"{base}/GetLoginData"
-        url_host = urlparse(base).hostname or ""
+            pass
+        if len(response_content) > 64:
+            try:
+                res_proto = thunderFF_pb2.MajorLoginRes()
+                res_proto.ParseFromString(response_content[64:])
+                if res_proto.region and res_proto.token:
+                    return res_proto
+            except Exception:
+                pass
+        for offset in range(min(128, len(response_content))):
+            try:
+                candidate = thunderFF_pb2.MajorLoginRes()
+                candidate.ParseFromString(response_content[offset:])
+                if candidate.region and candidate.token:
+                    return candidate
+            except Exception:
+                pass
+        res_proto = thunderFF_pb2.MajorLoginRes()
+        res_proto.ParseFromString(response_content)
+        return res_proto
     except Exception as e:
-        _warn_limited("gl_badurl", f"[GETLOGIN] bad login url {base_url!r}: {e}")
+        print_error(f"[MAJORLOGIN] Connection error: {e}")
         return None
-    hosts: List[str] = []
-    order = (LEGACY_GETLOGIN_HOST, url_host) if style == "legacy" else (url_host, LEGACY_GETLOGIN_HOST)
-    for h in order:                                  # the old code always forced the legacy Host; the real host of the URL is the second try
-        if h and h not in hosts:
-            hosts.append(h)
-    if url_host and url_host not in _getlogin_seen_hosts:
-        _getlogin_seen_hosts.add(url_host)
-        print_info(f"[GETLOGIN] login server host: {url_host}")
-    tries: List[str] = []
-    response = None
-    for host in hosts:
-        req_headers = _login_headers(release_version, style, token)
-        req_headers["Host"] = host
-        try:
-            r = await client.post(url, headers=req_headers, data=data)
-        except Exception as e:                       # network problem: a second Host will not help
-            tries.append(f"Host={host}: {type(e).__name__}: {e}")
-            break
-        if r.status_code == 200:
-            response = r
-            if host != hosts[0]:
-                _warn_limited("gl_hostfix", f"[GETLOGIN] OK only with Host={host} ({hosts[0]} was refused)")
-            break
-        try:
-            body = (r.text or "")[:80].replace("\n", " ")
-        except Exception:
-            body = ""
-        tries.append(f"Host={host}: HTTP {r.status_code} {body!r}")
-    if response is None:
-        _warn_limited("gl_refused", f"[GETLOGIN] refused ({style}) -> {' ; '.join(tries) or 'no attempt'} | url={url}")
-        return None
+
+
+async def send_getlogin(data, base_url, token, release_version):
     try:
+        url = f"{base_url.rstrip('/')}/GetLoginData"
+        req_headers = headers.copy()
+        req_headers["ReleaseVersion"] = release_version
+        req_headers['Authorization'] = f"Bearer {token}"
+        req_headers['Host'] = "clientbp.ppmainecoonghj.com"
+        response = await client.post(url, headers=req_headers, data=data)
+        if response.status_code != 200:
+            return None
         response_content = response.content
         res_proto = thunderFF_pb2.GetLoginDataRes()
         parsed_successfully = False
@@ -1076,67 +823,7 @@ async def send_getlogin(data, base_url, token, release_version, style="legacy"):
             pass
         return res_proto, dict_res
     except Exception as e:
-        _warn_limited("gl_parse", f"[GETLOGIN] could not read the answer: {type(e).__name__}: {e}")
         return None
-
-
-_login_mode_state: Dict[str, Optional[str]] = {"mode": None}
-
-
-async def login_sequence(open_id, access_token, platform, client_version, device_info,
-                         release_version, server_url, tag="LOGIN"):
-    """MajorLogin + GetLoginData as one unit, over the login modes (see LOGIN_MODE).
-    -> (majorlogin_response, getlogin_result, payload, style)  or None"""
-    if LOGIN_MODE == "auto":
-        order = list(LOGIN_MODE_ORDER)
-        last = _login_mode_state["mode"]
-        if last in order:                            # what worked last time goes first
-            order.remove(last)
-            order.insert(0, last)
-    else:
-        order = [LOGIN_MODE]
-    why: List[str] = []
-    for mode in order:
-        style = "legacy" if mode == "legacy" else "new"
-        if mode == "lean":
-            payload = build_lean_payload(open_id, access_token, platform)
-        else:
-            payload = await build_majorlogin_payload(open_id, access_token, platform, client_version, device_info)
-        if not payload:
-            why.append(f"{mode}: could not build payload")
-            continue
-        res = await send_majorlogin(payload, release_version, server_url, style)
-        if res is None:
-            why.append(f"{mode}: MajorLogin refused")
-            continue
-        if not (res.aes_ak and res.iv_i and res.server_time):
-            why.append(f"{mode}: answer has no aes_ak/iv_i/server_time (fields in answer: {res.field_ids})")
-            continue
-        gl = await send_getlogin(payload, res.url, res.token, release_version, style)
-        if gl is None:
-            why.append(f"{mode}: GetLoginData refused")
-            continue
-        gl_proto, gl_dict = gl
-        if not (gl_proto.functional_addrs or get_proto_field(gl_dict, 14)):
-            why.append(f"{mode}: GetLoginData has no gateway address")
-            continue
-        if _login_mode_state["mode"] != mode:
-            print_success(f"[LOGIN] login mode '{mode}' works -> used first from now on")
-        _login_mode_state["mode"] = mode
-        return res, gl, payload, style
-    print_error(f"[{tag}] every login mode failed: " + " | ".join(why))
-    return None
-
-
-def _packet_info(res, n) -> str:
-    """What a 'non-match big packet' contained (helps to see a cut-off packet or a new layout)."""
-    try:
-        top = sorted(res.keys(), key=int)
-        f5 = (res.get("5") or {}).get("data")
-        f5k = sorted(f5.keys(), key=int) if isinstance(f5, dict) else type(f5).__name__
-        return f"packet={n}B top_fields={top} field5={f5k}"
-    except Exception as e:
-        return f"packet info unavailable ({type(e).__name__})"
 
 
 async def build_tcp_startup_packet(account_id, token, server_time, key, iv, region="ID", typ='OnLine'):
@@ -2199,7 +1886,7 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                 break
                             else:
                                 consecutive_parse_failures += 1
-                                print_warning(f"[FUNCTIONAL] Non-match big packet (#{consecutive_parse_failures}/{MAX_CONSECUTIVE_PARSE_FAILURES}) -> reconnecting | {_packet_info(res, packet_length)}")
+                                print_warning(f"[FUNCTIONAL] Non-match big packet (#{consecutive_parse_failures}/{MAX_CONSECUTIVE_PARSE_FAILURES}) -> reconnecting")
                                 if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
                                     print_error(f"[FUNCTIONAL] {MAX_CONSECUTIVE_PARSE_FAILURES}x parse failures -> invalidating cache for fresh login")
                                     if current_account_data:
@@ -2373,8 +2060,7 @@ async def refresh_account_profile(account_data_or_uid: Any):
         res = None
         try:
             async with _refresh_sem:
-                res = await send_getlogin(payload, url, token, release_version,
-                                          style=account_data.get('login_style') or 'legacy')
+                res = await send_getlogin(payload, url, token, release_version)
         except Exception as e:
             print_error(f"[EXP-REFRESH] send_getlogin exception for {uid}: {e}")
             return
@@ -2557,12 +2243,18 @@ async def process_account_uid_pass(uid: str, password: str,
             return None
         open_id, access_token, platform = tokengrant_response
         device_info = get_device_for_account(uid)
-        seq = await login_sequence(open_id, access_token, platform, client_version, device_info,
-                                   release_version, server_url, tag=f"UID {uid}")
-        if seq is None:
-            print_error(f"[LOGIN] MajorLogin / GetLoginData failed for UID {uid}")
+        login_payload_data = await build_majorlogin_payload(open_id, access_token, platform, client_version, device_info)
+        if not login_payload_data:
+            print_error(f"[LOGIN] Failed to build MajorLogin payload for UID {uid}")
             return None
-        majorlogin_response, getlogin_result, login_payload_data, login_style = seq
+        majorlogin_response = await send_majorlogin(login_payload_data, release_version, server_url)
+        if majorlogin_response is None:
+            print_error(f"[LOGIN] MajorLogin rejected for UID {uid}")
+            return None
+        getlogin_result = await send_getlogin(login_payload_data, majorlogin_response.url, majorlogin_response.token, release_version)
+        if getlogin_result is None:
+            print_error(f"[LOGIN] GetLoginData failed for UID {uid}")
+            return None
         res_proto, dict_res = getlogin_result
         acc_id = str(majorlogin_response.account_id)
         level = int(get_proto_field(dict_res, 6, 1) or 1)
@@ -2590,7 +2282,6 @@ async def process_account_uid_pass(uid: str, password: str,
             'informational_addrs': res_proto.informational_addrs or get_proto_field(dict_res, 32),
             'release_version': release_version, 'client_version': client_version,
             'server_url': majorlogin_response.url, 'login_payload_data': login_payload_data,
-            'login_style': login_style,
             'auth_type': 'guest', 'auth_uid': uid, 'auth_password': password,
             'mode': mode, 'owner_user_id': owner_user_id, 'owner_username': owner_username,
         }
@@ -2634,23 +2325,16 @@ async def process_account_token(access_token: str,
             return None
         release_version, client_version, server_url = verconfig_res
         import requests
-        data = {"error": "no answer"}
-        for _base in TOKEN_INSPECT_URLS:
-            _host = urlparse(_base).hostname
-            hdrs = {
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "close",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Host": _host,
-                "User-Agent": "GarenaMSDK/4.0.19P4(G011A ;Android 9;en;US;)"
-            }
-            try:
-                resp = await asyncio.to_thread(requests.get, f"{_base}?token={access_token}", headers=hdrs, timeout=10)
-                data = resp.json()
-            except Exception as _e:
-                data = {"error": f"{type(_e).__name__}"}
-            if isinstance(data, dict) and 'error' not in data:
-                break
+        url = f"https://100067.connect.garena.com/oauth/token/inspect?token={access_token}"
+        hdrs = {
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "close",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Host": "100067.connect.garena.com",
+            "User-Agent": "GarenaMSDK/4.0.19P4(G011A ;Android 9;en;US;)"
+        }
+        resp = await asyncio.to_thread(requests.get, url, headers=hdrs, timeout=10)
+        data = resp.json()
         if 'error' in data:
             print_error(f"[LOGIN] Token inspect error: {data.get('error')}")
             return None
@@ -2660,12 +2344,18 @@ async def process_account_token(access_token: str,
             print_error("[LOGIN] No open_id in token inspect response")
             return None
         device_info = get_device_for_account(open_id)
-        seq = await login_sequence(open_id, access_token, str(platform), client_version, device_info,
-                                   release_version, server_url, tag="token flow")
-        if seq is None:
-            print_error("[LOGIN] MajorLogin / GetLoginData failed (token flow)")
+        login_payload_data = await build_majorlogin_payload(open_id, access_token, str(platform), client_version, device_info)
+        if not login_payload_data:
+            print_error("[LOGIN] Failed to build MajorLogin payload (token flow)")
             return None
-        majorlogin_response, getlogin_result, login_payload_data, login_style = seq
+        majorlogin_response = await send_majorlogin(login_payload_data, release_version, server_url)
+        if majorlogin_response is None:
+            print_error("[LOGIN] MajorLogin rejected (token flow)")
+            return None
+        getlogin_result = await send_getlogin(login_payload_data, majorlogin_response.url, majorlogin_response.token, release_version)
+        if getlogin_result is None:
+            print_error("[LOGIN] GetLoginData failed (token flow)")
+            return None
         res_proto, dict_res = getlogin_result
         acc_id = str(majorlogin_response.account_id)
         level = int(get_proto_field(dict_res, 6, 1) or 1)
@@ -2693,7 +2383,6 @@ async def process_account_token(access_token: str,
             'informational_addrs': res_proto.informational_addrs or get_proto_field(dict_res, 32),
             'release_version': release_version, 'client_version': client_version,
             'server_url': majorlogin_response.url, 'login_payload_data': login_payload_data,
-            'login_style': login_style,
             'auth_type': 'token', 'auth_token': access_token,
             'mode': mode, 'owner_user_id': owner_user_id, 'owner_username': owner_username,
         }
@@ -2978,7 +2667,6 @@ async def main():
     print_colored("   Persistent Device ID + TRUE Parallel + Smart DNS", Colors.WHITE)
     print_colored("=" * 60, Colors.CYAN)
     print_info(f"Start Match Interval: {START_MATCH_INTERVAL}s")
-    print_info(f"Login mode: {LOGIN_MODE} | PlAy_VeR: {PLAY_VER} | APP_VERSION override: {','.join(_env_app_versions()) or '-'}")
     print_info(f"Offline Wait: {NEW_MATCH_DELAY}s (after match found)")
     print_info(f"EXP Refresh: {EXP_REFRESH_INTERVAL}s interval (auto-slower with many accounts) + post-match trigger")
     print_info(f"Login queue: {LOGIN_CONCURRENCY} at a time | Refresh queue: {REFRESH_CONCURRENCY} at a time")
