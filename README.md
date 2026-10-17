@@ -25,6 +25,9 @@ so the server rewrites plans.json once.
 - `ZAPUPI_STATUS_URL` (optional), `TRUSTED_PROXY_HOPS` (default 1)
 - `SEARCH_STALL_TIMEOUT` (default 240) seconds without a match before the bot logs in again by itself
 - `VERBOSE_LOGS=1` (optional) shows every search packet in the log (off by default)
+- `APP_VERSION` (optional) force the Free Fire app version used for the version lookup, e.g. `1.132.11`. Normally NOT needed (see "Login / version" below).
+- `LOGIN_MODE` (optional, default `auto`): `auto` | `lean` | `full` | `legacy`, see "Login / version" below.
+- `PLAY_VER` (optional, default `1.132.1`): value of the `PlAy_VeR` header of the new login.
 
 ## Data storage (survives restarts / redeploys)
 - Everything that matters is saved in MongoDB (`persist.py`): accounts, order history, free-plan requests, device ids, token cache, EXP gained / matches per account (plus users and sessions).
@@ -42,3 +45,21 @@ Run: `pip install -r requirements.txt && python Main.py`
 - **Stop level**: when an account reaches it, it goes offline and shows `STOPPED` (it is NOT deleted).
 - Both are optional (tick *Additional settings*), also for bulk add. Off = same behaviour as before.
 - `GZIP=0` turns response compression off if your proxy already compresses.
+
+## Login / version (v8)
+**Version lookup.** The app version is asked from the Play Store; a wrong value ("Varies with device", an unknown 2.x.x) is ignored and the version server is asked with a list of candidates until it answers with a login server: `APP_VERSION` -> Play Store -> last version that worked -> built-in fallbacks (`DEFAULT_FALLBACK_VERSIONS`, edit after a new OB). Log: `[VERSION] OK app=... remote=... release=... server=...`.
+
+**New MajorLogin (OB55).** The bot has three login styles and `LOGIN_MODE=auto` tries them in this order, remembers the one that works and starts with it next time:
+1. `lean`   - the small LoginReq (open_id, open_id_type, login_token, orign_platform_type) + the new headers (`PlAy_VeR`, `Ob_VeR`, `X-Ga-Sv`, ...). Guest token comes from `ffmconnect.live.gop.garenanow.com` (old `100067.connect.garena.com` is the fallback).
+2. `full`   - the big old payload, but with the new headers.
+3. `legacy` - exactly the old login (old payload + old headers + old Host).
+A mode is accepted only if MajorLogin answers with token + account id + `aes_ak` / `iv_i` / `server_time` (needed for the game gateway) AND GetLoginData returns a gateway address. Set `LOGIN_MODE=lean` (or `full` / `legacy`) to force one style and never fall back.
+
+Log lines worth checking:
+- `[LOGIN] login mode 'lean' works ...`  -> new login OK
+- `[MAJORLOGIN/<style>] server rejected payload: HTTP ...` / `answer could not be read` -> why that style failed
+- `[GETLOGIN] refused -> ...` -> real reason why GetLoginData (EXP refresh) failed
+- `[LOGIN] every login mode failed: ...` -> all styles failed, reasons are listed (incl. which protobuf field numbers the server sent)
+- `[FUNCTIONAL] Non-match big packet ... | packet=NB top_fields=[...]` -> what an unrecognised game packet contained
+
+`version_fix.py` (old plug-in) is NOT needed any more - delete it and the `import version_fix` block at the bottom of Main.py if you still have them.
