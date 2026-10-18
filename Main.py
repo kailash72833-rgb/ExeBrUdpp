@@ -16,6 +16,8 @@ import traceback
 import base64
 import signal
 import hashlib
+import re
+from urllib.parse import urlparse, quote
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -537,49 +539,113 @@ _version_state: Dict[str, Any] = {"app_version": None, "app_time": 0.0, "config"
 _version_lock = asyncio.Lock()
 
 
+VER_URL = "https://version.ggwhitehawk.com/live/ver.php"
+_VER_RE = re.compile(r"^\d{1,2}\.\d{1,3}\.\d{1,3}$")             # 1.132.11   (NOT "Varies with device")
+DEFAULT_FALLBACK_VERSIONS = ("1.132.11", "1.132.8")               # asked when the Play Store gives nothing usable
+MAX_VERSION_CANDIDATES = 4
+_warn_times: Dict[str, float] = {}
+_version_log = {"last": None}
+
+
+def _warn_limited(key: str, msg: str, every: float = 60.0):
+    """Same warning at most once per minute (no log spam when something keeps failing)."""
+    now = time.time()
+    if now - _warn_times.get(key, 0.0) >= every:
+        _warn_times[key] = now
+        print_warning(msg)
+
+
+def _env_app_versions() -> List[str]:
+    raw = os.environ.get("APP_VERSION", "") or ""
+    return [v for v in (x.strip() for x in re.split(r"[,\s;]+", raw)) if _VER_RE.match(v)]
+
+
 async def get_playstore_version():
+    """A plausible app version (x.y.z) or None. Garena answers 'code 2' (no login server) for any version it does
+    not know ('Varies with device', '2.133.11' ...), so junk from the Play Store scraper is ignored here."""
+    env = _env_app_versions()
+    if env:                                                       # APP_VERSION=1.132.11 in Railway = skip Play Store
+        return env[0]
     now = time.time()
     if _version_state["app_version"] and now - _version_state["app_time"] < VERSION_CACHE_TTL * 2:
-        return _version_state["app_version"]
+        return _version_state["app_version"]                      # a version Garena already accepted
     loop = asyncio.get_running_loop()
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(None, lambda: play_scraper('com.dts.freefireth', lang='hi', country='id')),
             timeout=25
         )
-        version = result.get("version")
-        if version:
-            _version_state["app_version"] = version
-            _version_state["app_time"] = time.time()
-            return version
+        version = str((result or {}).get("version") or "").strip()
+        if _VER_RE.match(version):
+            return version                                        # cached only after the version server accepts it
+        _warn_limited("ps_junk", f"[VERSION] Play Store returned {version!r} (not a game version) -> ignored, using fallbacks")
     except Exception as e:
-        print_warning(f"[VERSION] Play Store lookup failed: {e}")
-    return _version_state["app_version"]      # last known version (None only if we never had one)
+        _warn_limited("ps_fail", f"[VERSION] Play Store lookup failed: {type(e).__name__}: {e}")
+    return _version_state["app_version"]                          # last known good (None if we never had one)
+
+
+async def _ask_version_server(version: str):
+    """-> (cfg | None, note, network_error)"""
+    url = (f"{VER_URL}?version={version}&lang=hi&device=android&channel=android"
+           "&appstore=googleplay&region=ID&whitelist_version=1.3.0&whitelist_sp_version=1.0.0")
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        return None, f"{version}: {type(e).__name__}", True
+    if not isinstance(data, dict):
+        return None, f"{version}: bad answer", False
+    if data.get("is_server_open") is False:
+        return None, f"{version}: game server closed (maintenance)", False
+    code = data.get("code")
+    server_url = data.get("server_url")
+    remote_version = data.get("remote_version")
+    latest_release_version = data.get("latest_release_version")
+    if code not in (0, "0", None) or not (server_url and remote_version and latest_release_version):
+        return None, f"{version}: code={code}", False
+    return (latest_release_version, remote_version, server_url), version, False
+
+
+async def _candidate_versions() -> List[str]:
+    """App versions to ask the version server, best first: APP_VERSION env, Play Store, last good, built-in fallbacks."""
+    candidates: List[str] = []
+
+    def add(v):
+        v = str(v or "").strip()
+        if v and _VER_RE.match(v) and v not in candidates:
+            candidates.append(v)
+
+    for v in _env_app_versions():
+        add(v)
+    add(await get_playstore_version())
+    add(_version_state["app_version"])
+    for v in DEFAULT_FALLBACK_VERSIONS:
+        add(v)
+    return candidates
 
 
 async def _fetch_version_config():
-    app_version = await get_playstore_version()
-    if not app_version:
-        return None
-    api_url = (
-        "https://version.ggwhitehawk.com/live/ver.php"
-        f"?version={app_version}"
-        "&lang=hi&device=android&channel=android"
-        "&appstore=googleplay&region=ID"
-        "&whitelist_version=1.3.0&whitelist_sp_version=1.0.0"
-    )
-    try:
-        response = await client.get(api_url)
-        response.raise_for_status()
-        data = response.json()
-        server_url = data.get("server_url")
-        remote_version = data.get("remote_version")
-        latest_release_version = data.get("latest_release_version")
-        if not server_url or not remote_version or not latest_release_version:
-            return None
-        return latest_release_version, remote_version, server_url
-    except Exception:
-        return None
+    """(release_version, remote_version, server_url) or None. Tries: APP_VERSION env, Play Store, last good, fallbacks."""
+    candidates = await _candidate_versions()
+    notes: List[str] = []
+    for v in candidates[:MAX_VERSION_CANDIDATES]:
+        cfg, note, net_err = await _ask_version_server(v)
+        if cfg:
+            _version_state["app_version"] = v
+            _version_state["app_time"] = time.time()
+            release, remote, srv = cfg
+            line = f"[VERSION] OK app={v} remote={remote} release={release} server={srv}"
+            if line != _version_log["last"]:
+                _version_log["last"] = line
+                extra = f"  (rejected before: {' | '.join(notes)})" if notes else ""
+                (print_info if notes else print_success)(line + extra)
+            return cfg
+        notes.append(note)
+        if net_err:                                               # version server unreachable: other candidates will not help
+            break
+    _warn_limited("ver_fail", "[VERSION] version server gave no login server. Tried: " + " | ".join(notes or ["nothing"]))
+    return None
 
 
 async def version_config():
@@ -601,15 +667,161 @@ async def version_config():
         return cfg       # stale answer is better than failing every login
 
 
-async def get_access_token(uid, password):
-    url = "https://100067.connect.garena.com/oauth/guest/token/grant"
-    hdrs = {
+# ==================== NEW MAJOR LOGIN SETTINGS (2026-10) ====================
+LOGIN_CODE_VERSION = "2026-10-18-web"
+# LOGIN_MODE (Railway variable, optional):
+#   auto   (default)  web    = login of Web.zip (OB55 payload + vercfg_sign / cdn / client_ip from the version
+#                              server + new headers + GetLoginData with the jwt)             <- tried first
+#                     lean   = small LoginReq payload + new headers
+#                     full   = old big payload + new headers
+#                     legacy = exactly the old way (old payload + old headers)
+#                     the first one that works completely is remembered and used first next time
+#   web | lean | full | legacy   = use only that one
+LOGIN_MODE = os.environ.get("LOGIN_MODE", "auto").strip().lower()
+if LOGIN_MODE not in ("auto", "web", "lean", "full", "legacy"):
+    LOGIN_MODE = "auto"
+LOGIN_MODE_ORDER = ("web", "lean", "full", "legacy")
+PLAY_VER = (os.environ.get("PLAY_VER", "1.132.1") or "1.132.1").strip()      # sent as 'PlAy_VeR' header
+LOGIN_X_GA_SV = "1789534056"                                                  # new-style 'X-Ga-Sv'
+GUEST_TOKEN_URLS = (
+    "https://ffmconnect.live.gop.garenanow.com/oauth/guest/token/grant",      # new
+    "https://100067.connect.garena.com/oauth/guest/token/grant",              # old (fallback)
+)
+TOKEN_INSPECT_URLS = (
+    "https://100067.connect.garena.com/oauth/token/inspect",
+    "https://ffmconnect.live.gop.garenanow.com/oauth/token/inspect",
+)
+LEGACY_GETLOGIN_HOST = "clientbp.ppmainecoonghj.com"                          # Host header the old code always forced
+_guest_url_pref: Dict[str, Optional[str]] = {"url": None}
+
+# ---------------- settings of the 'web' login (taken from Web.zip / app.py) ----------------
+LOGIN_REGION = (os.environ.get("LOGIN_REGION", "ID") or "ID").strip().upper()     # 'region' of the version server + payload field 26
+LOGIN_SERVER_URL_ENV = (os.environ.get("LOGIN_SERVER_URL", "") or "").strip()      # optional: force the MajorLogin server
+WEB_LOGIN_FALLBACK_URLS = ("https://loginbp.ggpolarbear.com/",)                   # used by Web.zip, tried after the version server's own address
+WEB_CLIENT_URLS = {                                                                # GetLoginData servers of Web.zip (fallback after the MajorLogin answer's url)
+    "IND": "https://client.ind.freefiremobile.com/",
+    "AMERICA": "https://client.us.freefiremobile.com/",
+    "OTHERS": "https://clientbp.ggpolarbear.com/",
+}
+WEB_REGION_GROUP = {"IND": "IND", "BR": "AMERICA", "US": "AMERICA", "NA": "AMERICA", "SAC": "AMERICA"}
+REGION_LANG = {"ME": "ar", "IND": "hi", "ID": "id", "VN": "vi", "TH": "th", "BD": "bn", "PK": "ur", "TW": "zh",
+               "EUROPE": "fr", "RU": "ru", "NA": "na", "SAC": "es", "BR": "pt", "SG": "ms", "US": "us"}
+WEB_SESSION_HASH = "1ac4b80ecf0478a44203bf8fac6120f5"
+WEB_DEVICE_ID = "Google|c15d0cbb-0f10-4ad4-a960-739ca3891a93"                    # only used when an account has no device id of its own
+WEB_SIG_BASE64 = ("KqsHTwFsNrz71lqUGAjS+qIySSj2KOGy6RrHPlpy6KkAVaY7JOEtuPh7yc+7ruAa8IoJQdj5KVD"
+                  "vnuda+C89owjNtP1VCdBI3Q591QXRXy8qF6s/")
+WEB_DEFAULT_CDN = ("https://dl.gmc.freefiremobile.com/live/ABHotUpdates/",
+                   "https://core-gmc.freefiremobile.com/live/ABHotUpdates/")
+WEB_MAJOR_TRIES = 2                                                                # MajorLogin tries per server when the network / server hiccups
+_login_base_pref: Dict[str, Optional[str]] = {"url": None}                        # MajorLogin server that worked last time
+_web_ver_lock = asyncio.Lock()
+_login_seen: set = set()
+
+
+def _norm_base(u) -> str:
+    u = str(u or "").strip()
+    return u if u.startswith(("http://", "https://")) else ""
+
+
+def _web_ver_url(version: str) -> str:
+    """Same query as Web.zip's fetch_ver_config(): channel 3rd_party, whitelist 1.7.0 + device data."""
+    q = (("version", version), ("lang", REGION_LANG.get(LOGIN_REGION, "en")), ("device", "android"),
+         ("channel", "3rd_party"), ("appstore", "thirdparty"), ("region", LOGIN_REGION),
+         ("whitelist_version", "1.7.0"), ("whitelist_sp_version", "1.0.0"),
+         ("device_name", "vivo V2538"), ("device_CPU", "ARM64 FP ASIMD AES"),
+         ("device_GPU", "Adreno (TM) 722"), ("device_mem", "7282"))
+    return VER_URL + "?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in q)
+
+
+async def _ask_web_ver(version: str):
+    """-> (cfg dict | None, note, network_error, hint_version)"""
+    try:
+        response = await client.get(_web_ver_url(version))
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        return None, f"{version}: {type(e).__name__}", True, None
+    if not isinstance(data, dict):
+        return None, f"{version}: bad answer", False, None
+    if data.get("is_server_open") is False:
+        return None, f"{version}: game server closed (maintenance)", False, None
+    code = data.get("code")
+    if code not in (0, "0"):
+        remote = str(data.get("remote_version") or "").strip()
+        return None, f"{version}: code={code}", False, (remote if _VER_RE.match(remote) else None)
+    missing = [k for k in ("remote_version", "latest_release_version", "vercfg_sign") if not data.get(k)]
+    if missing:
+        return None, f"{version}: answer has no {','.join(missing)}", False, None
+    return data, version, False, None
+
+
+async def _fetch_web_config():
+    """Full ver.php answer for the 'web' login (remote_version, latest_release_version, vercfg_sign, cdn_url,
+    abhotupdate_cdn_url, client_ip ...) or None. When the server names another version (code != 0 + remote_version)
+    that version is asked next - exactly like Web.zip does."""
+    queue = list((await _candidate_versions())[:MAX_VERSION_CANDIDATES])
+    tried: List[str] = []
+    notes: List[str] = []
+    while queue and len(tried) < MAX_VERSION_CANDIDATES + 1:
+        v = queue.pop(0)
+        if v in tried:
+            continue
+        tried.append(v)
+        cfg, note, net_err, hint = await _ask_web_ver(v)
+        if cfg:
+            _version_state["app_version"] = v
+            _version_state["app_time"] = time.time()
+            line = (f"[WEBVER] OK app={v} remote={cfg.get('remote_version')} release={cfg.get('latest_release_version')} "
+                    f"vercfg={cfg.get('vercfg_sign')} server={cfg.get('server_url')} region={LOGIN_REGION}")
+            if line != _version_log.get("web"):
+                _version_log["web"] = line
+                print_success(line)
+            return cfg
+        notes.append(note)
+        if net_err:
+            break
+        if hint and hint not in tried and hint not in queue:
+            queue.insert(0, hint)                                 # the server told us which version it wants
+    _warn_limited("webver_fail", "[WEBVER] version server gave no complete config. Tried: " + " | ".join(notes or ["nothing"]))
+    return None
+
+
+async def web_version_config():
+    """Cached (VERSION_CACHE_TTL) full config for the 'web' login. A stale answer is better than none."""
+    now = time.time()
+    cfg = _version_state.get("web")
+    if cfg and now - _version_state.get("web_time", 0.0) < VERSION_CACHE_TTL:
+        return cfg
+    async with _web_ver_lock:
+        cfg = _version_state.get("web")
+        if cfg and time.time() - _version_state.get("web_time", 0.0) < VERSION_CACHE_TTL:
+            return cfg
+        fresh = await _fetch_web_config()
+        if fresh:
+            _version_state["web"] = fresh
+            _version_state["web_time"] = time.time()
+            return fresh
+        return cfg
+
+
+def _guest_headers(url: str) -> Dict[str, str]:
+    if "garenanow.com" in url:
+        return {
+            "User-Agent": headers["User-Agent"],
+            "Connection": "Keep-Alive",
+            "Accept-Encoding": "gzip",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+    return {
         "Host": "100067.connect.garena.com",
         "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B Build/SP1A.210812.016)",
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "close"
+        "Connection": "close",
     }
+
+
+async def get_access_token(uid, password):
     data = {
         "uid": uid,
         "password": password,
@@ -618,21 +830,27 @@ async def get_access_token(uid, password):
         "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
         "client_id": "100067"
     }
-    for attempt in range(5):
-        try:
-            response = await client.post(url, headers=hdrs, data=data)
-            if response.status_code == 200:
-                response_data = response.json()
-                open_id = response_data.get("open_id")
-                access_token = response_data.get("access_token")
-                platform = response_data.get("platform", 4)
-                if open_id and access_token:
-                    return open_id, access_token, platform
-            if response.status_code == 429:
-                await asyncio.sleep(1)
-                continue
-        except Exception:
-            pass
+    urls = list(GUEST_TOKEN_URLS)
+    pref = _guest_url_pref["url"]
+    if pref in urls:                                  # the address that worked last time goes first
+        urls.remove(pref)
+        urls.insert(0, pref)
+    for attempt in range(3):
+        for url in urls:
+            try:
+                response = await client.post(url, headers=_guest_headers(url), data=data)
+                if response.status_code == 200:
+                    response_data = response.json()
+                    open_id = response_data.get("open_id")
+                    access_token = response_data.get("access_token")
+                    platform = response_data.get("platform", 4)
+                    if open_id and access_token:
+                        _guest_url_pref["url"] = url
+                        return open_id, access_token, platform
+                elif response.status_code == 429:
+                    await asyncio.sleep(1)
+            except Exception:
+                pass
         await asyncio.sleep(0.5)
     return None
 
@@ -743,59 +961,350 @@ async def build_majorlogin_payload(open_id, access_token, platform, client_versi
         return None
 
 
-async def send_majorlogin(data, release_version, server_url):
+# ==================== MAJORLOGIN (new lean LoginReq + legacy) ====================
+def build_lean_payload(open_id, access_token, platform):
+    """New MajorLogin body (LoginReq): open_id(22) open_id_type(23) login_token(29) orign_platform_type(99), AES-CBC."""
+    plat = str(platform or 4)
+    raw = build_proto({22: str(open_id), 23: plat, 29: str(access_token), 99: plat})
+    return encrypt_api_bytes(raw)
+
+
+def build_web_payload(open_id, access_token, platform, cfg, device_info=None, jwt=None):
+    """Login body of Web.zip (build_major_login / build_get_login_data), OB55 values.
+    cfg = full answer of the version server (remote_version, vercfg_sign, cdn_url, abhotupdate_cdn_url, client_ip).
+    jwt given -> GetLoginData body (extra field 108), else MajorLogin body. AES-CBC encrypted."""
     try:
-        url = f"{server_url}MajorLogin" if server_url.endswith('/') else f"{server_url}/MajorLogin"
-        req_headers = headers.copy()
-        req_headers["ReleaseVersion"] = str(release_version)
-        response = await client.post(url, headers=req_headers, data=data)
-        if response.status_code != 200:
-            print_error(f"[MAJORLOGIN] Server rejected payload with status {response.status_code}")
+        plat = int(platform)
+    except Exception:
+        plat = 4
+    device_info = device_info or {}
+    cfg = cfg or {}
+    cdn_url = cfg.get("cdn_url") or WEB_DEFAULT_CDN[0]
+    abhot_cdn = cfg.get("abhotupdate_cdn_url") or WEB_DEFAULT_CDN[1]
+    client_ip = str(cfg.get("client_ip") or device_info.get("client_ip") or "182.5.135.225")
+    cdn_hash = hashlib.md5(f"{open_id}{time.time_ns()}".encode()).hexdigest()
+    fields = {
+        3: datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        4: "free fire", 5: 1,
+        7: str(cfg.get("remote_version") or ""),
+        8: "Android OS 16 / API-36 (BP2A.250605.031.A3_V000L1/compiler260320183556)",
+        9: "Handheld", 11: "CarrierDataNetwork",
+        12: 1637, 13: 750, 14: "440",
+        15: "ARM64 FP ASIMD AES | 5606 | 8", 16: 7282,
+        17: "Adreno (TM) 722",
+        18: "OpenGL ES 3.2 V@0800.69.2 (GIT@4659378004, I7f7aee143c, 1773055375) (Date:03/09/26)",
+        19: str(device_info.get("unique_device_id") or WEB_DEVICE_ID),
+        20: client_ip, 21: REGION_LANG.get(LOGIN_REGION, "en"),
+        22: str(open_id), 23: str(plat),
+        24: "Handheld", 25: "vivo V2538", 26: LOGIN_REGION,
+        29: str(access_token), 30: 1,
+        42: "4G", 57: WEB_SESSION_HASH,
+        60: 223554, 61: 100654, 62: 4465,
+        64: 100782, 65: 223554, 66: 100782,
+        67: 223554, 70: 4, 73: 1,
+        74: "/data/app/~~Hl4pq6GoyauPV457pS4N8g==/com.dts.freefireth-mRT8MtqxsyyrZkxcQBSRAA==/lib/arm64",
+        76: 1,
+        77: "066a589fa3f5658377634fe7b1d88556|/data/app/~~Hl4pq6GoyauPV457pS4N8g==/com.dts.freefireth-mRT8MtqxsyyrZkxcQBSRAA==/base.apk",
+        78: 6, 79: 2, 81: "64", 83: "2019121227",
+        85: 3, 86: "OpenGLES2", 87: 8191,
+        88: plat, 92: 40843,
+        93: "3rd_party", 94: WEB_SIG_BASE64,
+        95: 111207,
+        96: '{"cur_rate":[60,90,120],"support_etc2":false}',
+        97: 1, 98: 1,
+        99: str(plat), 100: str(plat),
+        102: "42531243535e0e0531", 104: 84750, 105: 1,
+        106: f"{cdn_url}|{abhot_cdn}|{cdn_hash}",
+        107: str(cfg.get("vercfg_sign") or ""),
+    }
+    if jwt:
+        fields[108] = str(jwt)
+    return encrypt_api_bytes(build_proto(fields))
+
+
+def _web_login_bases(cfg, server_url) -> List[str]:
+    """MajorLogin servers for the 'web' login, best first (forced env, last good, version server, Web.zip's own)."""
+    out: List[str] = []
+    for u in (LOGIN_SERVER_URL_ENV, _login_base_pref["url"], (cfg or {}).get("server_url"), server_url, *WEB_LOGIN_FALLBACK_URLS):
+        u = _norm_base(u)
+        if u and u.rstrip("/") not in [x.rstrip("/") for x in out]:
+            out.append(u)
+    return out
+
+
+def _web_client_bases(res_url, region) -> List[str]:
+    """GetLoginData servers: the address in the MajorLogin answer first, then Web.zip's client url of the region."""
+    reg = str(region or LOGIN_REGION).upper()
+    group = WEB_REGION_GROUP.get(reg, "OTHERS")
+    out: List[str] = []
+    for u in (res_url, WEB_CLIENT_URLS.get(group)):
+        u = _norm_base(u)
+        if u and u.rstrip("/") not in [x.rstrip("/") for x in out]:
+            out.append(u)
+    return out
+
+
+def _login_headers(release_version, style: str, token: Optional[str] = None) -> Dict[str, str]:
+    """style 'legacy' = headers exactly as before, 'new' = headers of the lean login,
+    'web' = headers of Web.zip (X-GA-SV = current time)."""
+    if style == "legacy":
+        h = headers.copy()
+        h["ReleaseVersion"] = str(release_version)
+    elif style == "web":
+        h = {
+            "User-Agent": headers["User-Agent"],
+            "Accept": "*/*",
+            "Accept-Encoding": "deflate, gzip",
+            "Authorization": "Bearer",
+            "X-GA": "v1 1",
+            "X-GA-SV": str(int(time.time())),
+            "ReleaseVersion": str(release_version),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Unity-Version": "2018.4.12f1",
+        }
+    else:
+        h = {
+            "User-Agent": headers["User-Agent"],
+            "Accept": "*/*",
+            "Accept-Encoding": "deflate, gzip",
+            "X-Ga-Sv": LOGIN_X_GA_SV,
+            "Authorization": "Bearer",
+            "X-Ga": "v1 1",
+            "Releaseversion": str(release_version),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "X-Unity-Version": "2018.4.12f1",
+            "PlAy_VeR": PLAY_VER,
+            "Ob_VeR": str(release_version),
+        }
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def _pb_varint(buf, i):
+    n = shift = 0
+    while True:
+        b = buf[i]                                   # IndexError = cut-off data -> caught by the caller
+        i += 1
+        n |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return n, i
+        shift += 7
+        if shift > 70:
+            raise ValueError("varint too long")
+
+
+def _pb_fields(buf) -> Dict[int, list]:
+    """Strict protobuf wire reader: {field_number: [values]}  (varint -> int, everything else -> bytes)."""
+    out: Dict[int, list] = {}
+    i, n = 0, len(buf)
+    while i < n:
+        tag, i = _pb_varint(buf, i)
+        fno, wt = tag >> 3, tag & 7
+        if fno == 0:
+            raise ValueError("field 0")
+        if wt == 0:
+            v, i = _pb_varint(buf, i)
+        elif wt == 2:
+            ln, i = _pb_varint(buf, i)
+            if i + ln > n:
+                raise ValueError("cut off")
+            v = bytes(buf[i:i + ln])
+            i += ln
+        elif wt == 1:
+            if i + 8 > n:
+                raise ValueError("cut off")
+            v = bytes(buf[i:i + 8])
+            i += 8
+        elif wt == 5:
+            if i + 4 > n:
+                raise ValueError("cut off")
+            v = bytes(buf[i:i + 4])
+            i += 4
+        else:
+            raise ValueError("wire type")
+        out.setdefault(fno, []).append(v)
+    return out
+
+
+class _LoginRes:
+    """MajorLogin answer. Old (MajorLoginRes) and new (LoginRes) names share the same field numbers:
+    1 account_id | 2 region | 8 token | 10 url (server_url) | 21 server_time | 22 aes_ak | 23 iv_i"""
+    account_id = 0
+    region = ""
+    token = ""
+    url = ""
+    ttl = 0
+    server_time = 0
+    aes_ak = b""
+    iv_i = b""
+    field_ids: List[int] = []
+
+
+def _jwt_region(token: str) -> str:
+    """lock_region / noti_region inside the jwt (used when the answer has no region field)."""
+    try:
+        part = token.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        return str(data.get("lock_region") or data.get("noti_region") or "")
+    except Exception:
+        return ""
+
+
+def _try_login_res(raw) -> Optional[_LoginRes]:
+    try:
+        f = _pb_fields(raw)
+        acc = f.get(1, [None])[-1]               # protobuf rule: if a field repeats, the last value wins
+        tok = f.get(8, [None])[-1]
+        if not isinstance(acc, int) or acc <= 0 or not isinstance(tok, bytes) or not tok:
             return None
-        response_content = response.content
-        if len(response_content) < 40:
-            return None
-        res_proto = thunderFF_pb2.MajorLoginRes()
-        try:
-            res_proto.ParseFromString(response_content)
-            if res_proto.region and res_proto.token:
-                return res_proto
-        except Exception:
-            pass
-        if len(response_content) > 64:
-            try:
-                res_proto = thunderFF_pb2.MajorLoginRes()
-                res_proto.ParseFromString(response_content[64:])
-                if res_proto.region and res_proto.token:
-                    return res_proto
-            except Exception:
-                pass
-        for offset in range(min(128, len(response_content))):
-            try:
-                candidate = thunderFF_pb2.MajorLoginRes()
-                candidate.ParseFromString(response_content[offset:])
-                if candidate.region and candidate.token:
-                    return candidate
-            except Exception:
-                pass
-        res_proto = thunderFF_pb2.MajorLoginRes()
-        res_proto.ParseFromString(response_content)
-        return res_proto
-    except Exception as e:
-        print_error(f"[MAJORLOGIN] Connection error: {e}")
+
+        def s(no):
+            v = f.get(no, [None])[-1]
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else ""
+
+        def i(no):
+            v = f.get(no, [0])[-1]
+            return v if isinstance(v, int) else 0
+
+        def b(no):
+            v = f.get(no, [None])[-1]
+            return v if isinstance(v, bytes) else b""
+
+        res = _LoginRes()
+        res.account_id = acc
+        res.token = tok.decode("utf-8", "replace")
+        res.region = s(2) or s(3) or _jwt_region(res.token)          # lock_region, else noti_region, else from the jwt
+        res.url = s(10)
+        res.ttl = i(9)
+        res.server_time = i(21)
+        res.aes_ak = b(22)
+        res.iv_i = b(23)
+        res.field_ids = sorted(f.keys())
+        return res
+    except Exception:
         return None
 
 
-async def send_getlogin(data, base_url, token, release_version):
+def _scan_login_res(raw) -> Optional[_LoginRes]:
+    res = _try_login_res(raw)
+    if res:
+        return res
+    for i in range(1, min(len(raw), 256)):
+        if raw[i] == 0x08:                           # tag of field 1 (account_id)
+            res = _try_login_res(raw[i:])
+            if res:
+                return res
+    return None
+
+
+def _aes_decrypt_try(data) -> Optional[bytes]:
     try:
-        url = f"{base_url.rstrip('/')}/GetLoginData"
-        req_headers = headers.copy()
-        req_headers["ReleaseVersion"] = release_version
-        req_headers['Authorization'] = f"Bearer {token}"
-        req_headers['Host'] = "clientbp.ppmainecoonghj.com"
-        response = await client.post(url, headers=req_headers, data=data)
-        if response.status_code != 200:
+        if not data or len(data) % 16:
             return None
+        out = AES.new(AES_KEY, AES.MODE_CBC, AES_IV).decrypt(bytes(data))
+        n = out[-1]
+        if 1 <= n <= 16 and out.endswith(bytes([n]) * n):
+            out = out[:-n]
+        return out
+    except Exception:
+        return None
+
+
+def parse_login_response(raw: bytes) -> Optional[_LoginRes]:
+    """Reads the MajorLogin answer: as it is, with junk bytes in front, and (like Web.zip) after AES decryption,
+    also with the first 64 bytes cut off."""
+    res = _scan_login_res(raw)
+    if res:
+        return res
+    for part in (raw, raw[64:]) if len(raw) > 64 else (raw,):
+        dec = _aes_decrypt_try(part)
+        if dec:
+            res = _scan_login_res(dec)
+            if res:
+                return res
+    return None
+
+
+async def send_majorlogin(data, release_version, server_url, style="legacy", info=None):
+    """info (optional dict) gets 'kind' on failure: net | http5xx (server busy) | http | parse."""
+    tag = f"[MAJORLOGIN/{style}]"
+    if info is None:
+        info = {}
+    url = ""
+    try:
+        url = f"{server_url}MajorLogin" if server_url.endswith('/') else f"{server_url}/MajorLogin"
+        response = await client.post(url, headers=_login_headers(release_version, style), data=data)
+    except Exception as e:
+        info["kind"] = "net"
+        print_error(f"{tag} connection error: {type(e).__name__}: {e} | url={url}")
+        return None
+    if response.status_code != 200:
+        info["kind"] = "http5xx" if (response.status_code >= 500 or response.status_code == 429) else "http"
+        info["status"] = response.status_code
+        try:
+            body = (response.text or "")[:80].replace("\n", " ")
+        except Exception:
+            body = ""
+        print_error(f"{tag} server rejected payload: HTTP {response.status_code} {body!r} | url={url}")
+        return None
+    content = response.content
+    res = parse_login_response(content)
+    if res is None:
+        info["kind"] = "parse"
+        print_error(f"{tag} answer could not be read ({len(content)} bytes, starts {content[:12].hex()}) | url={url}")
+        return None
+    return res
+
+
+_getlogin_seen_hosts = set()
+
+
+async def send_getlogin(data, base_url, token, release_version, style="legacy"):
+    try:
+        base = str(base_url or "").rstrip("/")
+        url = f"{base}/GetLoginData"
+        url_host = urlparse(base).hostname or ""
+    except Exception as e:
+        _warn_limited("gl_badurl", f"[GETLOGIN] bad login url {base_url!r}: {e}")
+        return None
+    hosts: List[str] = []
+    if style == "legacy":
+        order = (LEGACY_GETLOGIN_HOST, url_host)
+    elif style == "web":
+        order = (url_host,)                          # Web.zip: no forced Host header
+    else:
+        order = (url_host, LEGACY_GETLOGIN_HOST)
+    for h in order:                                  # the old code always forced the legacy Host; the real host of the URL is the second try
+        if h and h not in hosts:
+            hosts.append(h)
+    if url_host and url_host not in _getlogin_seen_hosts:
+        _getlogin_seen_hosts.add(url_host)
+        print_info(f"[GETLOGIN] login server host: {url_host}")
+    tries: List[str] = []
+    response = None
+    for host in hosts:
+        req_headers = _login_headers(release_version, style, token)
+        req_headers["Host"] = host
+        try:
+            r = await client.post(url, headers=req_headers, data=data)
+        except Exception as e:                       # network problem: a second Host will not help
+            tries.append(f"Host={host}: {type(e).__name__}: {e}")
+            break
+        if r.status_code == 200:
+            response = r
+            if host != hosts[0]:
+                _warn_limited("gl_hostfix", f"[GETLOGIN] OK only with Host={host} ({hosts[0]} was refused)")
+            break
+        try:
+            body = (r.text or "")[:80].replace("\n", " ")
+        except Exception:
+            body = ""
+        tries.append(f"Host={host}: HTTP {r.status_code} {body!r}")
+    if response is None:
+        _warn_limited("gl_refused", f"[GETLOGIN] refused ({style}) -> {' ; '.join(tries) or 'no attempt'} | url={url}")
+        return None
+    try:
         response_content = response.content
         res_proto = thunderFF_pb2.GetLoginDataRes()
         parsed_successfully = False
@@ -823,7 +1332,121 @@ async def send_getlogin(data, base_url, token, release_version):
             pass
         return res_proto, dict_res
     except Exception as e:
+        _warn_limited("gl_parse", f"[GETLOGIN] could not read the answer: {type(e).__name__}: {e}")
         return None
+
+
+async def _login_classic(mode, open_id, access_token, platform, client_version, device_info, release_version, server_url):
+    """lean / full / legacy: -> ((res, getlogin_result, payload, style) | None, why)"""
+    style = "legacy" if mode == "legacy" else "new"
+    if mode == "lean":
+        payload = build_lean_payload(open_id, access_token, platform)
+    else:
+        payload = await build_majorlogin_payload(open_id, access_token, platform, client_version, device_info)
+    if not payload:
+        return None, f"{mode}: could not build payload"
+    res = await send_majorlogin(payload, release_version, server_url, style)
+    if res is None:
+        return None, f"{mode}: MajorLogin refused"
+    if not (res.aes_ak and res.iv_i and res.server_time):
+        return None, f"{mode}: answer has no aes_ak/iv_i/server_time (fields in answer: {res.field_ids})"
+    gl = await send_getlogin(payload, res.url, res.token, release_version, style)
+    if gl is None:
+        return None, f"{mode}: GetLoginData refused"
+    return (res, gl, payload, style), ""
+
+
+async def _login_web(open_id, access_token, platform, device_info, server_url):
+    """The login of Web.zip: -> ((res, getlogin_result, getlogin_payload, 'web') | None, why)"""
+    cfg = await web_version_config()
+    if not cfg:
+        return None, "web: no complete config from the version server (see [WEBVER] line)"
+    release = str(cfg.get("latest_release_version"))
+    payload = build_web_payload(open_id, access_token, platform, cfg, device_info)
+    bases = _web_login_bases(cfg, server_url)
+    res = None
+    used_base = ""
+    for base in bases:
+        for attempt in range(WEB_MAJOR_TRIES):
+            info: Dict[str, Any] = {}
+            res = await send_majorlogin(payload, release, base, "web", info)
+            if res is not None or info.get("kind") not in ("net", "http5xx"):
+                break                                # only a network hiccup / busy server is worth the same address again
+            await asyncio.sleep(1.5 * (attempt + 1))
+        if res is not None:
+            used_base = base
+            _login_base_pref["url"] = base
+            break
+    if res is None:
+        return None, f"web: MajorLogin refused (tried {', '.join(bases) or 'no server'})"
+    if not (res.aes_ak and res.iv_i and res.server_time):
+        return None, f"web: answer has no aes_ak/iv_i/server_time (fields in answer: {res.field_ids})"
+    gl_payload = build_web_payload(open_id, access_token, platform, cfg, device_info, jwt=res.token)
+    gl = None
+    gl_base = ""
+    for base in _web_client_bases(res.url, res.region):
+        gl = await send_getlogin(gl_payload, base, res.token, release, "web")
+        if gl is not None:
+            gl_base = base
+            break
+    if gl is None:
+        return None, "web: GetLoginData refused"
+    if gl_base and gl_base.rstrip("/") != str(res.url or "").rstrip("/"):
+        res.url = gl_base                            # EXP refresh asks GetLoginData at res.url -> use the address that worked
+    seen = (used_base, gl_base)
+    if seen not in _login_seen:
+        _login_seen.add(seen)
+        print_info(f"[LOGIN] web login servers: MajorLogin={used_base} | GetLoginData={gl_base}")
+    return (res, gl, gl_payload, "web"), ""
+
+
+_login_mode_state: Dict[str, Optional[str]] = {"mode": None}
+
+
+async def login_sequence(open_id, access_token, platform, client_version, device_info,
+                         release_version, server_url, tag="LOGIN"):
+    """MajorLogin + GetLoginData as one unit, over the login modes (see LOGIN_MODE).
+    -> (majorlogin_response, getlogin_result, payload, style)  or None"""
+    if LOGIN_MODE == "auto":
+        order = list(LOGIN_MODE_ORDER)
+        last = _login_mode_state["mode"]
+        if last in order:                            # what worked last time goes first
+            order.remove(last)
+            order.insert(0, last)
+    else:
+        order = [LOGIN_MODE]
+    why: List[str] = []
+    for mode in order:
+        if mode == "web":
+            out, reason = await _login_web(open_id, access_token, platform, device_info, server_url)
+        else:
+            out, reason = await _login_classic(mode, open_id, access_token, platform, client_version,
+                                               device_info, release_version, server_url)
+        if out is None:
+            why.append(reason)
+            continue
+        res, gl, payload, style = out
+        gl_proto, gl_dict = gl
+        if not (gl_proto.functional_addrs or get_proto_field(gl_dict, 14)):
+            why.append(f"{mode}: GetLoginData has no gateway address")
+            continue
+        if _login_mode_state["mode"] != mode:
+            print_success(f"[LOGIN] login mode '{mode}' works -> used first from now on")
+        _login_mode_state["mode"] = mode
+        return res, gl, payload, style
+    print_error(f"[{tag}] every login mode failed: " + " | ".join(why))
+    return None
+
+
+def _packet_info(res, n) -> str:
+    """What a 'non-match big packet' contained (helps to see a cut-off packet or a new layout)."""
+    try:
+        top = sorted(res.keys(), key=int)
+        f5 = (res.get("5") or {}).get("data")
+        f5k = sorted(f5.keys(), key=int) if isinstance(f5, dict) else type(f5).__name__
+        return f"packet={n}B top_fields={top} field5={f5k}"
+    except Exception as e:
+        return f"packet info unavailable ({type(e).__name__})"
 
 
 async def build_tcp_startup_packet(account_id, token, server_time, key, iv, region="ID", typ='OnLine'):
@@ -1664,1138 +2287,4 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         print_warning(f"[FUNCTIONAL] Cache miss for {uid_str} -> re-login needed")
                         try:
                             if current_account_data.get('auth_uid'):
-                                cache_invalidate(str(current_account_data['auth_uid']))
-                            if current_account_data.get('auth_token'):
-                                cache_invalidate(token_key(current_account_data['auth_token']))
-                        except Exception:
-                            pass
-                        raise ConnectionError("Cache expired, triggering fresh login")
-                try:
-                    if uid_str in bot_state.accounts:
-                        live_lv = int(bot_state.accounts[uid_str].get('level', current_level) or current_level)
-                        if live_lv != current_level:
-                            print_info(f"[LEVEL] UID {uid_str}: {current_level} -> {live_lv} (live)")
-                            current_level = live_lv
-                except Exception:
-                    pass
-
-                resolved_ip = await resolve_host_cloudflare(ip)
-                reader, writer = await asyncio.wait_for(asyncio.open_connection(resolved_ip, int(port)), timeout=12)
-                raw_sock = writer.get_extra_info('socket')
-                if raw_sock:
-                    optimize_tcp_socket(raw_sock)
-                writer.write(bytes.fromhex(current_token))
-                await asyncio.wait_for(writer.drain(), timeout=8)
-
-                try:
-                    init_ka = await send_keep_alive(account_region)
-                    if init_ka and writer and not writer.is_closing():
-                        writer.write(init_ka)
-                        await asyncio.wait_for(writer.drain(), timeout=3)
-                except Exception:
-                    pass
-
-                async def func_gateway_keepalive():
-                    ka_bytes = await send_keep_alive(account_region)
-                    while True:
-                        await asyncio.sleep(5)
-                        try:
-                            if writer and not writer.is_closing():
-                                writer.write(ka_bytes)
-                                await writer.drain()
-                        except Exception:
-                            break
-
-                gateway_ping_task = asyncio.create_task(func_gateway_keepalive())
-
-                print_success(
-                    f"[FUNCTIONAL] TCP Gateway Connected for UID: {uid_str} "
-                    f"(DNS: {resolved_ip}, Lvl: {current_level}, Mode: {_MODE})"
-                )
-                reconnects = 0
-                no_response_count = 0
-                last_start_time = 0.0
-                search_started = asyncio.get_running_loop().time()   # when this search began (stall watchdog)
-                stall_limit = SEARCH_STALL_TIMEOUT + random.uniform(0, 30)   # jitter: accounts do not all re-login together
-
-                def _force_fresh_login(reason: str):
-                    """Throw the saved session away and log in again (fixes 'EXP stopped growing')."""
-                    print_warning(f"[SELF-HEAL] UID {uid_str}: {reason} -> fresh login")
-                    if current_account_data:
-                        try:
-                            if current_account_data.get('auth_uid'):
-                                cache_invalidate(str(current_account_data['auth_uid']))
-                            if current_account_data.get('auth_token'):
-                                cache_invalidate(token_key(current_account_data['auth_token']))
-                        except Exception:
-                            pass
-                    raise ConnectionError("Cache expired, " + reason)
-
-                async def send_start_match():
-                    nonlocal search_attempts, last_start_time
-                    search_attempts += 1
-                    current_region = "ID"
-                    mode_tag, _mid, _map = _resolve_mode()
-                    if mode_tag == "LONE_WOLF":
-                        starter_func = start_game_lone_wolf
-                    else:
-                        starter_func = start_game_battle_royale
-                    print_debug(f"[{mode_tag}] Sending StartMatch #{search_attempts} region: {current_region} (Lvl {current_level}, mode={_MODE})")
-                    try:
-                        await asyncio.sleep(random.uniform(0.3, 0.6))
-                        await asyncio.wait_for(
-                            starter_func(current_region, client_version, writer, current_key, current_iv),
-                            timeout=10)
-                        print_debug(f"[{mode_tag}] StartMatch packet sent")
-                        active = await _get_match_count(uid_str)
-                        try:
-                            bot_state.update_status(uid_str, f"SEARCHING ({mode_tag})", active)
-                        except Exception:
-                            pass
-                    except asyncio.TimeoutError:
-                        raise ConnectionError("StartMatch write timed out (dead connection)")
-                    except Exception as e:
-                        print_error(f"start_game error: {e}")
-                    last_start_time = asyncio.get_running_loop().time()
-
-                if not bot_state.is_paused(uid_str):
-                    await send_start_match()
-
-                while True:
-                    if bot_state.is_deleted(uid_str):
-                        print_warning(f"[DELETE] UID {uid_str} deleted -> stopping functional loop")
-                        raise asyncio.CancelledError()
-                    if bot_state.is_stopped(uid_str):
-                        await cancel_play_matches()
-                        print_warning(f"[STOP] UID {uid_str} reached its stop level -> going offline")
-                        return
-                    play_matches[:] = [m for m in play_matches if not m.done()]
-                    active_count = await _get_match_count(uid_str)
-                    try:
-                        bot_state.update_status(uid_str, "ONLINE" if active_count == 0 else "IN_MATCH", active_count)
-                    except Exception:
-                        pass
-
-                    if bot_state.is_paused(uid_str):
-                        await cancel_play_matches()      # a match that is already running is stopped too
-                        search_started = asyncio.get_running_loop().time()   # a pause is not a stall
-                        try:
-                            bot_state.update_status(uid_str, "PAUSED", 0)
-                        except Exception:
-                            pass
-                        if not hasattr(send_start_match, "_pause_logged"):
-                            print_warning(f"[PAUSE] UID {uid_str} paused. Waiting...")
-                            send_start_match._pause_logged = True
-                        await asyncio.sleep(1.0)
-                        continue
-                    else:
-                        if getattr(send_start_match, "_pause_logged", False):
-                            print_success(f"[RESUME] UID {uid_str} resumed.")
-                            send_start_match._pause_logged = False
-
-                    now = asyncio.get_running_loop().time()
-                    # ---- self-heal: old session / search that never finds a match ----
-                    if SEARCH_STALL_TIMEOUT > 0 and now - search_started >= stall_limit:
-                        _force_fresh_login(f"no match for {int(SEARCH_STALL_TIMEOUT)}s")
-                    try:
-                        _cached_at = float((current_account_data or {}).get('cached_at') or 0)
-                    except Exception:
-                        _cached_at = 0.0
-                    if _cached_at and time.time() - _cached_at > TOKEN_CACHE_TTL + 60:
-                        _force_fresh_login("session is older than the allowed age")
-                    if now - last_start_time >= START_MATCH_INTERVAL:
-                        await send_start_match()
-
-                    try:
-                        data = await asyncio.wait_for(reader.read(8192), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        no_response_count += 1
-                        if no_response_count > 40:
-                            print_warning(f"[FUNCTIONAL] Gateway silent ({uid_str}). Reconnecting...")
-                            raise ConnectionError("Gateway idle timeout")
-                        continue
-
-                    if not data:
-                        raise ConnectionError("Connection closed by server")
-
-                    hex_data = data.hex()
-                    packet_length = len(data)
-                    no_response_count = 0
-
-                    if hex_data.startswith("0300") and 10 < packet_length < 30:
-                        print_debug("Match starting, please wait...")
-                        continue
-
-                    if hex_data.startswith("0300") and packet_length >= 300:
-                        print_colored("=" * 60, Colors.GREEN)
-                        print_colored(f"MATCH FOUND! Loading...", Colors.GREEN)
-                        print_colored("=" * 60, Colors.GREEN)
-                        try:
-                            res = json.loads(await decode_protobuf(hex_data[10:]))
-                            token = None
-                            udp_key = None
-                            match_code = None
-                            server_ip_port = None
-                            match_account_id = None
-                            block_val = None
-                            if '42' in res and 'data' in res['42']:
-                                match_code = res['42']['data']
-                            if '5' in res and 'data' in res['5']:
-                                res_field5 = res['5']['data']
-                                server_ip_port = res_field5.get('2', {}).get('data')
-                                udp_key = res_field5.get('3', {}).get('data')
-                                token = res_field5.get('4', {}).get('data')
-                                if '42' in res_field5:
-                                    match_code = res_field5['42']['data']
-                            if '1' in res and 'data' in res['1']:
-                                match_account_id = res['1']['data']
-                            if '5' in res and 'data' in res['5']:
-                                block_val = res['5']['data'].get('1', {}).get('data')
-                            effective_acc_id = match_account_id or account_id or "BD_BOT"
-                            if token and udp_key and match_code and server_ip_port:
-                                acc_tok = ""
-                                if current_account_data:
-                                    acc_tok = current_account_data.get('access_token', '') or ""
-
-                                mode_tag, selected_mode_id, selected_map_id = _resolve_mode()
-                                print_info(f"[MATCH] Mode: {mode_tag} | mode_id={selected_mode_id} | map_id={selected_map_id} | UID: {uid_str}")
-
-                                thunder, sharma = await build_match_startup_packets(
-                                    token, udp_key, match_code, effective_acc_id, block_val or 0,
-                                    server_ip=server_ip_port, region=account_region,
-                                    client_version=client_version, access_token=acc_tok,
-                                    mode_id=selected_mode_id, map_id=selected_map_id
-                                )
-                                match_index = await _inc_match(uid_str)
-                                total = await _get_total_match_count()
-                                print_colored(f"[MATCH #{match_index}] UDP starting ({mode_tag}) -> {server_ip_port}", Colors.CYAN)
-                                print_success(f"[FUNCTIONAL] UDP task started. UID active: {match_index} | Total: {total}")
-                                new_match = asyncio.create_task(
-                                    play_game(
-                                        server_ip_port, thunder, sharma, udp_key, match_code,
-                                        effective_acc_id, "ID", client_version, current_key, current_iv,
-                                        match_index=match_index, on_match_complete=trigger_post_match_refresh
-                                    )
-                                )
-                                play_matches.append(new_match)
-                                consecutive_parse_failures = 0
-                                await _safe_close(writer)
-                                print_info(f"[OFFLINE] {NEW_MATCH_DELAY}s offline -> reload token -> new StartMatch")
-                                await asyncio.sleep(NEW_MATCH_DELAY)
-                                reconnects = 0
-                                break
-                            else:
-                                consecutive_parse_failures += 1
-                                print_warning(f"[FUNCTIONAL] Non-match big packet (#{consecutive_parse_failures}/{MAX_CONSECUTIVE_PARSE_FAILURES}) -> reconnecting")
-                                if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
-                                    print_error(f"[FUNCTIONAL] {MAX_CONSECUTIVE_PARSE_FAILURES}x parse failures -> invalidating cache for fresh login")
-                                    if current_account_data:
-                                        try:
-                                            if current_account_data.get('auth_uid'):
-                                                cache_invalidate(str(current_account_data['auth_uid']))
-                                            if current_account_data.get('auth_token'):
-                                                cache_invalidate(token_key(current_account_data['auth_token']))
-                                        except Exception:
-                                            pass
-                                    consecutive_parse_failures = 0
-                                await _safe_close(writer)
-                                await asyncio.sleep(NON_MATCH_RECONNECT_DELAY)
-                                break
-                        except Exception as e:
-                            print_error(f"[FUNCTIONAL] Match packet error: {e}")
-                            consecutive_parse_failures += 1
-                            if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
-                                if current_account_data:
-                                    try:
-                                        if current_account_data.get('auth_uid'):
-                                            cache_invalidate(str(current_account_data['auth_uid']))
-                                        if current_account_data.get('auth_token'):
-                                            cache_invalidate(token_key(current_account_data['auth_token']))
-                                    except Exception:
-                                        pass
-                                consecutive_parse_failures = 0
-                            await _safe_close(writer)
-                            await asyncio.sleep(NON_MATCH_RECONNECT_DELAY)
-                            break
-
-                    if 30 <= packet_length <= 40:
-                        continue
-
-            except asyncio.CancelledError:
-                print_warning(f"[FUNCTIONAL] Cancelled — cancelling {len(play_matches)} UDP matches")
-                for m in play_matches:
-                    if not m.done():
-                        m.cancel()
-                if play_matches:
-                    await asyncio.gather(*play_matches, return_exceptions=True)
-                play_matches.clear()
-                if gateway_ping_task:
-                    gateway_ping_task.cancel()
-                raise
-            except Exception as e:
-                if gateway_ping_task:
-                    gateway_ping_task.cancel()
-                if "Cache expired" in str(e):
-                    print_warning(f"[FUNCTIONAL] ({uid_str}) {e}")
-                else:
-                    print_error(f"[FUNCTIONAL] TCP state ({uid_str}): {e}")
-                play_matches[:] = [m for m in play_matches if not m.done()]
-                if writer:
-                    await _safe_close(writer)
-                if "Cache expired" in str(e):
-                    print_warning(f"[FUNCTIONAL] Triggering re-login for {uid_str}")
-                    break
-                reconnects += 1
-                if reconnects > max_reconnects:
-                    print_error("[FUNCTIONAL] Max reconnects reached, retrying...")
-                    reconnects = 0
-                    await asyncio.sleep(3)
-                    continue
-                await asyncio.sleep(min(reconnects, 2))
-            finally:
-                if gateway_ping_task:
-                    gateway_ping_task.cancel()
-                if writer:
-                    await _safe_close(writer)
-
-    except asyncio.CancelledError:
-        print_warning(f"[FUNCTIONAL] Outer cancelled. {len(play_matches)} UDP matches still running.")
-        for m in play_matches:
-            if not m.done():
-                m.cancel()
-        if play_matches:
-            await asyncio.gather(*play_matches, return_exceptions=True)
-        play_matches.clear()
-        raise
-
-
-async def informational(addrs, starter_packet, key, iv, region="ID", max_reconnects=3):
-    reconnects = 0
-    ip, port = addrs.split(":")
-    while True:
-        writer = None
-        ping_task = None
-        try:
-            resolved_ip = await resolve_host_cloudflare(ip)
-            reader, writer = await asyncio.open_connection(resolved_ip, int(port))
-            raw_sock = writer.get_extra_info('socket')
-            if raw_sock:
-                optimize_tcp_socket(raw_sock)
-            writer.write(bytes.fromhex(starter_packet))
-            await writer.drain()
-            reconnects = 0
-            try:
-                init_ka = await send_keep_alive(region)
-                if init_ka and writer and not writer.is_closing():
-                    writer.write(init_ka)
-                    await asyncio.wait_for(writer.drain(), timeout=3)
-            except Exception:
-                pass
-
-            async def info_keepalive():
-                ka_bytes = await send_keep_alive(region)
-                while True:
-                    await asyncio.sleep(5)
-                    try:
-                        if writer and not writer.is_closing():
-                            writer.write(ka_bytes)
-                            await writer.drain()
-                    except Exception:
-                        break
-            ping_task = asyncio.create_task(info_keepalive())
-            while True:
-                data = await reader.read(8192)
-                if not data:
-                    raise ConnectionError("Connection closed")
-        except asyncio.CancelledError:
-            if ping_task:
-                ping_task.cancel()
-            if writer:
-                await _safe_close(writer)
-            raise
-        except Exception:
-            if ping_task:
-                ping_task.cancel()
-            if writer:
-                await _safe_close(writer)
-            reconnects += 1
-            if reconnects > max_reconnects:
-                await asyncio.sleep(3)
-                reconnects = 0
-            else:
-                await asyncio.sleep(1)
-
-
-# ==================== ACCOUNT PROCESSORS ====================
-def _register_credentials(account_data: Dict):
-    try:
-        acc_id = str(account_data['account_id'])
-        bot_state.account_credentials[acc_id] = account_data
-        if account_data.get('auth_uid'):
-            bot_state.account_credentials[str(account_data['auth_uid'])] = account_data
-        if account_data.get('auth_token'):
-            bot_state.account_credentials[token_key(account_data['auth_token'])] = account_data
-    except Exception:
-        pass
-
-
-async def refresh_account_profile(account_data_or_uid: Any):
-    try:
-        if isinstance(account_data_or_uid, str):
-            uid = str(account_data_or_uid)
-            account_data = bot_state.account_credentials.get(uid)
-        else:
-            account_data = account_data_or_uid
-            uid = str(account_data.get('account_id')) if account_data else "?"
-        if not account_data:
-            print_warning(f"[EXP-REFRESH] No credentials for UID {uid}")
-            return
-        url = account_data.get('server_url')
-        token = account_data.get('token')
-        release_version = account_data.get('release_version')
-        payload = account_data.get('login_payload_data')
-        if not (url and token and release_version and payload):
-            print_warning(f"[EXP-REFRESH] Missing fields for {uid}")
-            return
-        res = None
-        try:
-            async with _refresh_sem:
-                res = await send_getlogin(payload, url, token, release_version)
-        except Exception as e:
-            print_error(f"[EXP-REFRESH] send_getlogin exception for {uid}: {e}")
-            return
-        if not res:
-            print_warning(f"[EXP-REFRESH] GetLoginData returned None for {uid}")
-            return
-        res_proto, dict_res = res
-
-        def _safe_int(v, default):
-            try:
-                if v is None or v == "":
-                    return default
-                return int(v)
-            except Exception:
-                return default
-
-        level = _safe_int(get_proto_field(dict_res, 6, None), None)
-        exp = _safe_int(get_proto_field(dict_res, 7, None), None)
-        likes = _safe_int(get_proto_field(dict_res, 8, None), None)
-        nickname = ""
-        try:
-            nickname = res_proto.nickname or get_proto_field(dict_res, 4, "") or ""
-        except Exception:
-            nickname = ""
-        if level is None and exp is None:
-            print_warning(f"[EXP-REFRESH] No level/exp field parsed for {uid}")
-            return
-        level = level if level is not None else 1
-        exp = exp if exp is not None else 0
-        likes = likes if likes is not None else 0
-        acc_id = str(account_data['account_id'])
-        old_level = 0
-        old_exp = 0
-        try:
-            if acc_id in bot_state.accounts:
-                old_level = int(bot_state.accounts[acc_id].get('level', 0) or 0)
-                old_exp = int(bot_state.accounts[acc_id].get('current_exp', 0) or 0)
-        except Exception:
-            pass
-        try:
-            bot_state.update_exp(acc_id, exp, level)
-        except Exception as e:
-            print_error(f"[EXP-REFRESH] update_exp failed for {acc_id}: {e}")
-        try:
-            stop_lv = int((bot_state.accounts.get(acc_id) or {}).get('stop_level') or 0)
-            if stop_lv and level >= stop_lv and not bot_state.is_stopped(acc_id):
-                bot_state.mark_stopped(acc_id, level)
-                print_warning(f"[STOP] UID {acc_id}: level {level} reached the stop level {stop_lv} -> stopping (not deleting)")
-        except Exception as e:
-            print_warning(f"[STOP] check failed for {acc_id}: {e}")
-        if likes > 0 and acc_id in bot_state.accounts:
-            try:
-                bot_state.accounts[acc_id]["likes"] = likes
-            except Exception:
-                pass
-        if nickname and acc_id in bot_state.accounts:
-            try:
-                bot_state.accounts[acc_id]["nickname"] = nickname
-            except Exception:
-                pass
-        _update_cache_profile(account_data, level, exp)
-        account_data['level'] = level
-        account_data['exp'] = exp
-        if likes > 0:
-            account_data['likes'] = likes
-        if nickname:
-            account_data['nickname'] = nickname
-        if old_level > 0 and level > old_level:
-            print_success(f"[LEVEL UP] UID {acc_id} : Lvl {old_level} -> {level} (EXP {old_exp} -> {exp})")
-        elif old_exp != exp:
-            print_success(f"[EXP] UID {acc_id} Lvl {level} | EXP {old_exp} -> {exp} (+{exp - old_exp})")
-    except Exception as e:
-        print_error(f"refresh_account_profile error: {e}")
-        traceback.print_exc()
-
-
-# ==================== LEVEL RULES (max level to add / auto-stop level) ====================
-def _gate_level(login_key, level: int):
-    """Decide what to do with an account that just logged in.
-    'ok' = run it, 'reject' = level is above the max level to add -> never added, 'stop' = already at its stop level."""
-    lim = bot_state.account_limits.get(str(login_key))
-    if not lim:
-        return "ok", ""
-    mx = int(lim.get("max") or 0)
-    hi = int(lim.get("stop") or 0)
-    if lim.get("accepted"):                       # accepted before (e.g. after a restart): only the stop rule matters
-        if hi and level >= hi:
-            return "stop", f"reached stop level {hi}"
-        return "ok", ""
-    if mx and level > mx:                         # max 21 -> level 21 or lower can be added
-        return "reject", f"Level {level} is too high: max level {mx} (only level {mx} or lower can be added)"
-    if hi and level >= hi:
-        return "reject", f"Level {level} has already reached the stop level {hi}"
-    return "ok", ""
-
-
-def _limit_kwargs(login_key) -> Dict:
-    lim = bot_state.account_limits.get(str(login_key)) or {}
-    return {"stop_level": int(lim.get("stop") or 0), "max_level": int(lim.get("max") or 0)}
-
-
-def _persist_accepted(login_key):
-    try:
-        entries = _read_accounts()
-        changed = False
-        for e in entries:
-            k = str(e.get("uid")) if e.get("uid") else token_key(e.get("token", ""))
-            if k == str(login_key) and not e.get("accepted"):
-                e["accepted"] = True
-                changed = True
-        if changed:
-            _write_accounts(entries)
-    except Exception as ex:
-        print_warning(f"[LEVEL] could not save accepted flag: {ex}")
-
-
-def _finish_gate(login_key, acc_id, level: int, gate: str):
-    """Called right after the account was registered."""
-    lim = bot_state.account_limits.get(str(login_key))
-    if not lim:
-        return
-    if gate == "stop":
-        bot_state.mark_stopped(acc_id, level)
-    elif not lim.get("accepted"):
-        lim["accepted"] = True
-        _persist_accepted(login_key)
-
-
-async def _reject_login(login_key, display_uid, owner_id, reason: str):
-    """The account's level is outside the allowed range: remove it completely, as if it was never added."""
-    ids = {str(login_key), str(display_uid)}
-    print_warning(f"[LEVEL] {display_uid}: {reason} -> NOT added")
-    try:
-        _write_accounts([e for e in _read_accounts() if not (_entry_ids(e) & ids)])
-    except Exception as ex:
-        print_warning(f"[LEVEL] could not clean accounts file: {ex}")
-    bot_state.mark_deleted(ids)
-    bot_state.account_workers.pop(str(login_key), None)
-    bot_state.account_limits.pop(str(login_key), None)
-    bot_state.reject_account(login_key, display_uid, owner_id, reason)
-    cb = bot_state.refresh_callbacks.get("on_account_deleted")
-    if cb:
-        try:
-            await cb(ids)
-        except Exception as ex:
-            print_warning(f"[LEVEL] cleanup failed: {ex}")
-
-
-async def process_account_uid_pass(uid: str, password: str,
-                                    owner_user_id: str = "", owner_username: str = "",
-                                    mode: str = "auto") -> Optional[Dict]:
-    cached = cache_get(uid)
-    if cached:
-        print_success(f"[CACHE HIT] UID {uid} loaded from token_cache.json (no login)")
-        acc_id = str(cached['account_id'])
-        c_level = int(cached.get('level', 1) or 1)
-        gate, why = _gate_level(uid, c_level)
-        if gate == "reject":
-            return {"_gate": "reject", "_reason": why}
-        bot_state.register_account(
-            uid=acc_id, nickname=cached.get('nickname', f"Player_{acc_id}"),
-            region=cached.get('region', 'ID'), level=c_level,
-            exp=cached.get('exp', 0), likes=cached.get('likes', 0),
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
-            **_limit_kwargs(uid)
-        )
-        _register_credentials(cached)
-        _finish_gate(uid, acc_id, c_level, gate)
-        return dict(cached, _gate="stop") if gate == "stop" else cached
-    print_info(f"[LOGIN] Full login for UID {uid}...")
-    try:
-        verconfig_res = await version_config()
-        if verconfig_res is None:
-            print_error(f"[LOGIN] version_config failed for UID {uid}")
-            return None
-        release_version, client_version, server_url = verconfig_res
-        tokengrant_response = await get_access_token(uid, password)
-        if tokengrant_response is None:
-            print_error(f"[LOGIN] get_access_token failed for UID {uid}")
-            return None
-        open_id, access_token, platform = tokengrant_response
-        device_info = get_device_for_account(uid)
-        login_payload_data = await build_majorlogin_payload(open_id, access_token, platform, client_version, device_info)
-        if not login_payload_data:
-            print_error(f"[LOGIN] Failed to build MajorLogin payload for UID {uid}")
-            return None
-        majorlogin_response = await send_majorlogin(login_payload_data, release_version, server_url)
-        if majorlogin_response is None:
-            print_error(f"[LOGIN] MajorLogin rejected for UID {uid}")
-            return None
-        getlogin_result = await send_getlogin(login_payload_data, majorlogin_response.url, majorlogin_response.token, release_version)
-        if getlogin_result is None:
-            print_error(f"[LOGIN] GetLoginData failed for UID {uid}")
-            return None
-        res_proto, dict_res = getlogin_result
-        acc_id = str(majorlogin_response.account_id)
-        level = int(get_proto_field(dict_res, 6, 1) or 1)
-        exp = int(get_proto_field(dict_res, 7, 0) or 0)
-        likes = int(get_proto_field(dict_res, 8, 0) or 0)
-        nickname = res_proto.nickname or get_proto_field(dict_res, 4, f"Player_{acc_id}")
-        region = majorlogin_response.region or get_proto_field(dict_res, 3, "ID")
-        gate, why = _gate_level(uid, level)
-        if gate == "reject":
-            return {"_gate": "reject", "_reason": why}
-        bot_state.register_account(
-            uid=acc_id, nickname=nickname, region=region, level=level, exp=exp, likes=likes,
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
-            **_limit_kwargs(uid)
-        )
-        mode_label = _mode_label(mode, level)
-        print_success(f"[OK] Login Success: UID {acc_id} | {nickname} | Lvl {level} | Mode: {mode_label}")
-        account_data = {
-            'account_id': majorlogin_response.account_id, 'nickname': nickname,
-            'region': region, 'level': level, 'exp': exp, 'likes': likes,
-            'open_id': open_id, 'access_token': access_token, 'platform': str(platform),
-            'token': majorlogin_response.token, 'server_time': majorlogin_response.server_time,
-            'aes_ak': majorlogin_response.aes_ak, 'iv_i': majorlogin_response.iv_i,
-            'functional_addrs': res_proto.functional_addrs or get_proto_field(dict_res, 14),
-            'informational_addrs': res_proto.informational_addrs or get_proto_field(dict_res, 32),
-            'release_version': release_version, 'client_version': client_version,
-            'server_url': majorlogin_response.url, 'login_payload_data': login_payload_data,
-            'auth_type': 'guest', 'auth_uid': uid, 'auth_password': password,
-            'mode': mode, 'owner_user_id': owner_user_id, 'owner_username': owner_username,
-        }
-        _register_credentials(account_data)
-        cache_set(uid, account_data)
-        _finish_gate(uid, acc_id, level, gate)
-        return dict(account_data, _gate="stop") if gate == "stop" else account_data
-    except Exception as e:
-        print_error(f"process_account_uid_pass error: {e}")
-        traceback.print_exc()
-        return None
-
-
-async def process_account_token(access_token: str,
-                                 owner_user_id: str = "", owner_username: str = "",
-                                 mode: str = "auto") -> Optional[Dict]:
-    cache_key = token_key(access_token)
-    cached = cache_get(cache_key)
-    if cached:
-        print_success(f"[CACHE HIT] Token {access_token[:10]}... loaded from cache")
-        acc_id = str(cached['account_id'])
-        c_level = int(cached.get('level', 1) or 1)
-        gate, why = _gate_level(cache_key, c_level)
-        if gate == "reject":
-            return {"_gate": "reject", "_reason": why}
-        bot_state.register_account(
-            uid=acc_id, nickname=cached.get('nickname', f"Player_{acc_id}"),
-            region=cached.get('region', 'ID'), level=c_level,
-            exp=cached.get('exp', 0), likes=cached.get('likes', 0),
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
-            **_limit_kwargs(cache_key)
-        )
-        _register_credentials(cached)
-        _finish_gate(cache_key, acc_id, c_level, gate)
-        return dict(cached, _gate="stop") if gate == "stop" else cached
-    print_info("[LOGIN] Full login with Access Token...")
-    try:
-        verconfig_res = await version_config()
-        if verconfig_res is None:
-            print_error("[LOGIN] version_config failed (token flow)")
-            return None
-        release_version, client_version, server_url = verconfig_res
-        import requests
-        url = f"https://100067.connect.garena.com/oauth/token/inspect?token={access_token}"
-        hdrs = {
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "close",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Host": "100067.connect.garena.com",
-            "User-Agent": "GarenaMSDK/4.0.19P4(G011A ;Android 9;en;US;)"
-        }
-        resp = await asyncio.to_thread(requests.get, url, headers=hdrs, timeout=10)
-        data = resp.json()
-        if 'error' in data:
-            print_error(f"[LOGIN] Token inspect error: {data.get('error')}")
-            return None
-        open_id = data.get('open_id')
-        platform = data.get('platform', 4)
-        if not open_id:
-            print_error("[LOGIN] No open_id in token inspect response")
-            return None
-        device_info = get_device_for_account(open_id)
-        login_payload_data = await build_majorlogin_payload(open_id, access_token, str(platform), client_version, device_info)
-        if not login_payload_data:
-            print_error("[LOGIN] Failed to build MajorLogin payload (token flow)")
-            return None
-        majorlogin_response = await send_majorlogin(login_payload_data, release_version, server_url)
-        if majorlogin_response is None:
-            print_error("[LOGIN] MajorLogin rejected (token flow)")
-            return None
-        getlogin_result = await send_getlogin(login_payload_data, majorlogin_response.url, majorlogin_response.token, release_version)
-        if getlogin_result is None:
-            print_error("[LOGIN] GetLoginData failed (token flow)")
-            return None
-        res_proto, dict_res = getlogin_result
-        acc_id = str(majorlogin_response.account_id)
-        level = int(get_proto_field(dict_res, 6, 1) or 1)
-        exp = int(get_proto_field(dict_res, 7, 0) or 0)
-        likes = int(get_proto_field(dict_res, 8, 0) or 0)
-        nickname = res_proto.nickname or get_proto_field(dict_res, 4, f"Player_{acc_id}")
-        region = majorlogin_response.region or get_proto_field(dict_res, 3, "ID")
-        gate, why = _gate_level(cache_key, level)
-        if gate == "reject":
-            return {"_gate": "reject", "_reason": why}
-        bot_state.register_account(
-            uid=acc_id, nickname=nickname, region=region, level=level, exp=exp, likes=likes,
-            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
-            **_limit_kwargs(cache_key)
-        )
-        mode_label = _mode_label(mode, level)
-        print_success(f"[OK] Login Success (Token): UID {acc_id} | {nickname} | Lvl {level} | Mode: {mode_label}")
-        account_data = {
-            'account_id': majorlogin_response.account_id, 'nickname': nickname,
-            'region': region, 'level': level, 'exp': exp, 'likes': likes,
-            'open_id': open_id, 'access_token': access_token, 'platform': str(platform),
-            'token': majorlogin_response.token, 'server_time': majorlogin_response.server_time,
-            'aes_ak': majorlogin_response.aes_ak, 'iv_i': majorlogin_response.iv_i,
-            'functional_addrs': res_proto.functional_addrs or get_proto_field(dict_res, 14),
-            'informational_addrs': res_proto.informational_addrs or get_proto_field(dict_res, 32),
-            'release_version': release_version, 'client_version': client_version,
-            'server_url': majorlogin_response.url, 'login_payload_data': login_payload_data,
-            'auth_type': 'token', 'auth_token': access_token,
-            'mode': mode, 'owner_user_id': owner_user_id, 'owner_username': owner_username,
-        }
-        _register_credentials(account_data)
-        cache_set(cache_key, account_data)
-        _finish_gate(cache_key, acc_id, level, gate)
-        return dict(account_data, _gate="stop") if gate == "stop" else account_data
-    except Exception as e:
-        print_error(f"process_account_token error: {e}")
-        traceback.print_exc()
-        return None
-
-
-def _mode_label(mode: str, level: int) -> str:
-    m = str(mode or "auto").lower()
-    if m == "br":
-        return "Battle Royale (locked)"
-    if m == "lw":
-        return "Lone Wolf (locked)"
-    return "Lone Wolf" if level >= LONE_WOLF_UNLOCK_LEVEL else "Battle Royale"
-
-
-def _worker_ids(account_data: Dict) -> List[str]:
-    tok = account_data.get('auth_token') or ''
-    return [str(x) for x in (account_data.get('account_id'), account_data.get('auth_uid'), tok, token_key(tok) if tok else '') if x]
-
-
-async def _wait_until_allowed(owner_id: str, *ids) -> bool:
-    """Block while the owner's plan is expired / the account is over its slot limit.
-    Returns False if the account was deleted meanwhile."""
-    announced = False
-    while bot_state.is_blocked(owner_id, *ids):
-        if bot_state.is_deleted(*ids):
-            return False
-        if not announced:
-            print_warning(f"[PLAN] {ids[0]} stopped: plan expired or over slot limit. Waiting for renewal...")
-            announced = True
-        try:
-            bot_state.update_status(str(ids[0]), "EXPIRED", 0)
-        except Exception:
-            pass
-        await asyncio.sleep(PLAN_GUARD_INTERVAL * 2)
-    if announced:
-        print_success(f"[PLAN] {ids[0]} allowed again -> starting")
-    return True
-
-
-async def run_account_worker(account_data: Dict, label: str, mode: str = "auto", owner_user_id: str = ""):
-    acc_id = str(account_data['account_id'])
-    owner_id = str(owner_user_id or account_data.get('owner_user_id') or "")
-    informational_task = None
-    exp_task = None
-    functional_task = None
-    guard_task = None
-    try:
-        reg = account_data.get('region', 'ID')
-        tcp_packet_online = await build_tcp_startup_packet(
-            account_data['account_id'], account_data['token'], account_data['server_time'],
-            account_data['aes_ak'], account_data['iv_i'], region=reg, typ='OnLine'
-        )
-        tcp_packet_chat = await build_tcp_startup_packet(
-            account_data['account_id'], account_data['token'], account_data['server_time'],
-            account_data['aes_ak'], account_data['iv_i'], region=reg, typ='ChaT'
-        )
-        informational_task = asyncio.create_task(
-            informational(account_data['informational_addrs'], tcp_packet_chat,
-                          account_data['aes_ak'], account_data['iv_i'], region=reg)
-        )
-
-        def _next_exp_delay() -> float:
-            # few accounts -> every 12s; hundreds of accounts -> slower (max 45s) + random spread
-            n = max(1, len(bot_state.accounts))
-            base = max(EXP_REFRESH_INTERVAL, min(EXP_REFRESH_MAX_INTERVAL, n * 0.12))
-            return base + random.uniform(0, base * 0.25)
-
-        async def exp_refresher():
-            try:
-                fresh = bot_state.account_credentials.get(acc_id)
-                if fresh:
-                    await refresh_account_profile(fresh)
-            except Exception as e:
-                print_warning(f"[EXP-REFRESH] initial refresh error ({acc_id}): {e}")
-            while True:
-                await asyncio.sleep(_next_exp_delay())
-                if bot_state.is_deleted(acc_id):
-                    return
-                try:
-                    fresh = bot_state.account_credentials.get(acc_id)
-                    if fresh:
-                        await refresh_account_profile(fresh)
-                except Exception as e:
-                    print_warning(f"[EXP-REFRESH] periodic refresh error ({acc_id}): {e}")
-
-        async def plan_guard():
-            while True:
-                await asyncio.sleep(PLAN_GUARD_INTERVAL)
-                if bot_state.is_blocked(owner_id, *_worker_ids(account_data)):
-                    return True
-
-        exp_task = asyncio.create_task(exp_refresher())
-        functional_task = asyncio.create_task(
-            functional_lone_wolf(
-                account_data['functional_addrs'], tcp_packet_online,
-                account_data['region'], account_data['client_version'],
-                account_data['aes_ak'], account_data['iv_i'],
-                account_id=acc_id, account_data=account_data,
-                account_level=int(account_data.get('level', 2) or 2),
-                mode=mode
-            )
-        )
-        guard_task = asyncio.create_task(plan_guard())
-        done, _pending = await asyncio.wait({functional_task, guard_task}, return_when=asyncio.FIRST_COMPLETED)
-        if guard_task in done and not functional_task.done():
-            print_warning(f"[PLAN] {acc_id} stopped: plan expired or over slot limit")
-            functional_task.cancel()
-            try:
-                await functional_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            try:
-                bot_state.update_status(acc_id, "EXPIRED", 0)
-            except Exception:
-                pass
-        else:
-            await functional_task          # re-raises errors exactly like before
-    except asyncio.CancelledError:
-        raise
-    except Exception as e:
-        print_error(f"run_account_worker error for {label}: {e}")
-    finally:
-        tasks = (informational_task, exp_task, functional_task, guard_task)
-        for t in tasks:
-            if t and not t.done():
-                t.cancel()
-        for t in tasks:
-            if t:
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-
-async def account_loop_guest(uid: str, password: str, mode: str = "auto",
-                              owner_user_id: str = "", owner_username: str = ""):
-    fail_count = 0
-    bot_state.add_pending(uid, uid, owner_user_id, owner_username, mode)    # visible at once as "CONNECTING"
-    await asyncio.sleep(random.uniform(0, 2.0))          # spread the start-up of many accounts
-    while True:
-        if bot_state.is_deleted(uid):
-            print_warning(f"[DELETE] Guest UID {uid} deleted -> worker exit")
-            break
-        try:
-            if not await _wait_until_allowed(owner_user_id, uid):
-                print_warning(f"[DELETE] Guest UID {uid} deleted while waiting -> worker exit")
-                break
-            print_info(f"[LOGIN] Starting login for Guest UID: {uid} (mode: {mode})...")
-            try:
-                bot_state.update_status(str(uid), "CONNECTING")
-            except Exception:
-                pass
-            async with _login_sem:                       # fair queue: max LOGIN_CONCURRENCY logins at once
-                if bot_state.is_deleted(uid):
-                    continue
-                account_data = await process_account_uid_pass(
-                    uid, password, owner_user_id=owner_user_id,
-                    owner_username=owner_username, mode=mode
-                )
-            if bot_state.is_deleted(uid, (account_data or {}).get('account_id')):
-                print_warning(f"[DELETE] Guest UID {uid} deleted during login -> worker exit")
-                break
-            gate = (account_data or {}).get("_gate")
-            if gate == "reject":                         # level outside the allowed range -> never added
-                await _reject_login(uid, uid, owner_user_id, account_data.get("_reason", "Level not allowed"))
-                break
-            if not account_data:
-                fail_count += 1
-                delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
-                print_error(f"Login failed for UID: {uid}. Retrying in {delay} seconds...")
-                bot_state.set_pending(uid, "LOGIN_FAILED", "Login failed. Check UID / password. Retrying...")
-                try:
-                    bot_state.update_status(str(uid), "ERROR")
-                except Exception:
-                    pass
-                await asyncio.sleep(delay + random.uniform(0, 3))
-                continue
-            fail_count = 0
-            bot_state.clear_pending(uid)
-            if gate == "stop":                           # restart: already at its stop level -> stays STOPPED
-                print_warning(f"[STOP] UID {uid}: stop level reached -> not running")
-                break
-            await run_account_worker(account_data, uid, mode=mode, owner_user_id=owner_user_id)
-            if bot_state.is_stopped(account_data.get('account_id')):
-                print_warning(f"[STOP] UID {uid}: stop level reached -> worker finished (account kept, status STOPPED)")
-                break
-            print_warning(f"Session finished for {uid}. Reconnecting in 3s...")
-            await asyncio.sleep(3)
-        except asyncio.CancelledError:
-            print_warning(f"Worker for {uid} stopped.")
-            bot_state.clear_pending(uid)
-            try:
-                bot_state.update_status(str(uid), "OFFLINE")
-            except Exception:
-                pass
-            break
-        except Exception as e:
-            print_error(f"Error for UID {uid}: {e}. Retrying in 10s...")
-            await asyncio.sleep(10)
-
-
-async def account_loop_token(token: str, mode: str = "auto",
-                              owner_user_id: str = "", owner_username: str = ""):
-    token_label = token_key(token)
-    fail_count = 0
-    bot_state.add_pending(token_label, token_label, owner_user_id, owner_username, mode)
-    await asyncio.sleep(random.uniform(0, 2.0))
-    while True:
-        if bot_state.is_deleted(token, token_label):
-            print_warning(f"[DELETE] Token {token_label} deleted -> worker exit")
-            break
-        try:
-            if not await _wait_until_allowed(owner_user_id, token_label, token):
-                print_warning(f"[DELETE] Token {token_label} deleted while waiting -> worker exit")
-                break
-            print_info(f"[LOGIN] Starting login with Access Token (mode: {mode})...")
-            async with _login_sem:
-                if bot_state.is_deleted(token, token_label):
-                    continue
-                account_data = await process_account_token(
-                    token, owner_user_id=owner_user_id,
-                    owner_username=owner_username, mode=mode
-                )
-            if bot_state.is_deleted(token, token_label, (account_data or {}).get('account_id')):
-                print_warning(f"[DELETE] Token {token_label} deleted during login -> worker exit")
-                break
-            gate = (account_data or {}).get("_gate")
-            if gate == "reject":
-                await _reject_login(token_label, token_label, owner_user_id, account_data.get("_reason", "Level not allowed"))
-                break
-            if not account_data:
-                fail_count += 1
-                delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
-                print_error(f"Login failed for Token. Retrying in {delay} seconds...")
-                bot_state.set_pending(token_label, "LOGIN_FAILED", "Login failed. Token may be expired. Retrying...")
-                await asyncio.sleep(delay + random.uniform(0, 3))
-                continue
-            fail_count = 0
-            bot_state.clear_pending(token_label)
-            acc_id = str(account_data['account_id'])
-            if gate == "stop":
-                print_warning(f"[STOP] UID {acc_id}: stop level reached -> not running")
-                break
-            await run_account_worker(account_data, acc_id, mode=mode, owner_user_id=owner_user_id)
-            if bot_state.is_stopped(acc_id):
-                print_warning(f"[STOP] UID {acc_id}: stop level reached -> worker finished (account kept, status STOPPED)")
-                break
-            print_warning("Token session finished. Reconnecting in 3s...")
-            await asyncio.sleep(3)
-        except asyncio.CancelledError:
-            print_warning(f"Worker for token {token_label} stopped.")
-            bot_state.clear_pending(token_label)
-            break
-        except Exception as e:
-            print_error(f"Token error: {e}. Retrying in 10s...")
-            await asyncio.sleep(10)
-
-
-def load_accounts():
-    accounts = []
-    try:
-        accounts = [a for a in _read_accounts() if isinstance(a, dict)]       # MongoDB (or local file when no MongoDB)
-    except Exception as e:
-        print_error(f"Could not load accounts: {e}")
-    if not accounts and FALLBACK_UID and FALLBACK_PASSWORD:
-        accounts.append({"uid": FALLBACK_UID, "password": FALLBACK_PASSWORD})
-    return accounts
-
-
-# ==================== MAIN ====================
-async def main():
-    print_colored("=" * 60, Colors.CYAN)
-    print_colored("    EXE LEVEL UP - FreeFire Bot (Web Dashboard Mode)", Colors.GREEN)
-    print_colored("   Persistent Device ID + TRUE Parallel + Smart DNS", Colors.WHITE)
-    print_colored("=" * 60, Colors.CYAN)
-    print_info(f"Start Match Interval: {START_MATCH_INTERVAL}s")
-    print_info(f"Offline Wait: {NEW_MATCH_DELAY}s (after match found)")
-    print_info(f"EXP Refresh: {EXP_REFRESH_INTERVAL}s interval (auto-slower with many accounts) + post-match trigger")
-    print_info(f"Login queue: {LOGIN_CONCURRENCY} at a time | Refresh queue: {REFRESH_CONCURRENCY} at a time")
-    print_info("Device System: 1 ID = 1 Persistent Device ID (devices.json)")
-    print_colored("-" * 60, Colors.MAGENTA)
-    print_info("MODE SWITCH:")
-    print_info("   * auto  -> BR (Lvl<3) / LW (Lvl>=3)")
-    print_info("   * br    -> Battle Royale only")
-    print_info("   * lw    -> Lone Wolf only")
-    print_colored("=" * 60, Colors.CYAN)
-
-    main_task = asyncio.current_task()
-    try:
-        loop = asyncio.get_running_loop()
-        for _sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(_sig, main_task.cancel)     # clean save on Render / Railway restarts
-    except Exception:
-        pass
-
-    try:
-        await start_web_dashboard(host=WEB_HOST, port=WEB_PORT)
-        print_success(f"Web Dashboard live at port {WEB_PORT}")
-    except Exception as e:
-        print_error(f"Could not start web dashboard: {e}")
-
-    flusher_task = asyncio.create_task(token_cache_flusher())
-
-    async def on_account_added_handler(data):
-        mode = str(data.get("mode", "auto")).strip().lower()
-        if mode not in ("auto", "br", "lw"):
-            mode = "auto"
-        owner_id = str(data.get("owner_user_id", "") or "")
-        owner_name = str(data.get("owner_username", "") or "")
-
-        async def _replace_worker(key, coro):
-            old = bot_state.account_workers.pop(key, None)
-            if old and not old.done():
-                old.cancel()
-                await asyncio.wait([old], timeout=10)
-            bot_state.account_workers[key] = asyncio.create_task(coro)
-
-        if "token" in data and data["token"]:
-            t = str(data["token"]).strip()
-            await _replace_worker(token_key(t), account_loop_token(
-                t, mode=mode, owner_user_id=owner_id, owner_username=owner_name
-            ))
-        elif "uid" in data and "password" in data:
-            u = str(data["uid"]).strip()
-            p = str(data["password"]).strip()
-            await _replace_worker(u, account_loop_guest(
-                u, p, mode=mode, owner_user_id=owner_id, owner_username=owner_name
-            ))
-
-    async def on_refresh_account_handler(uid):
-        await refresh_account_profile(uid)
-
-    async def on_account_deleted_handler(ids):
-        ids = {str(i) for i in ids}
-        for key in list(_load_token_cache().keys()):
-            if key in ids:
-                cache_invalidate(key)
-        try:
-            devices = persist_store.load("devices", DEVICES_FILE, {})
-            remaining = {k: v for k, v in devices.items() if k not in ids}
-            if len(remaining) != len(devices):
-                persist_store.save("devices", DEVICES_FILE, remaining)
-        except Exception as e:
-            print_error(f"[DELETE] devices cleanup failed: {e}")
-        async with _match_counter_lock:
-            for i in ids:
-                _match_counters.pop(i, None)
-        print_success(f"[DELETE] Account fully wiped: {', '.join(sorted(i for i in ids if not i.startswith('tok_')))[:120]}")
-
-    bot_state.refresh_callbacks["on_account_added"] = on_account_added_handler
-    bot_state.refresh_callbacks["on_account_deleted"] = on_account_deleted_handler
-    bot_state.refresh_callbacks["on_refresh_account"] = on_refresh_account_handler
-
-    accounts = load_accounts()
-    if not accounts:
-        print_warning("No accounts saved yet. Add them from the Web Dashboard.")
-
-    for acc in accounts:
-        mode = str(acc.get("mode", "auto")).strip().lower()
-        if mode not in ("auto", "br", "lw"):
-            mode = "auto"
-        owner_id = str(acc.get("owner_user_id", "") or "")
-        owner_name = str(acc.get("owner_username", "") or "")
-        if acc.get("max_level") or acc.get("stop_level"):
-            _lk = token_key(acc["token"]) if acc.get("token") else str(acc.get("uid", ""))
-            bot_state.account_limits[_lk] = {"max": int(acc.get("max_level") or 0),
-                                             "stop": int(acc.get("stop_level") or 0),
-                                             "accepted": bool(acc.get("accepted"))}
-        if "token" in acc and acc["token"]:
-            t = asyncio.create_task(account_loop_token(
-                acc["token"], mode=mode, owner_user_id=owner_id, owner_username=owner_name
-            ))
-            bot_state.account_workers[token_key(acc["token"])] = t
-        elif "uid" in acc and "password" in acc and acc["uid"]:
-            u = str(acc["uid"])
-            t = asyncio.create_task(account_loop_guest(
-                u, acc["password"], mode=mode, owner_user_id=owner_id, owner_username=owner_name
-            ))
-            bot_state.account_workers[u] = t
-
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        print_warning("\n[STOP] Shutting down all accounts...")
-        for t in list(bot_state.account_workers.values()):
-            t.cancel()
-        await asyncio.gather(*bot_state.account_workers.values(), return_exceptions=True)
-        flusher_task.cancel()
-        try:
-            _flush_token_cache_sync()
-            await user_store.flush_now()
-            try:
-                import dashboard_server as _ds
-                _ds._save_stats_now()                       # EXP gained / matches per account
-            except Exception as e:
-                print_warning(f"[STORAGE] stats save at shutdown failed: {e}")
-            await asyncio.to_thread(persist_store.flush, 8.0)   # accounts / orders / devices -> MongoDB
-        except Exception as e:
-            print_error(f"Final save failed: {e}")
-        print_success("All sessions cleanly closed.")
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print_warning("\nProgram stopped by user.")
+                                cache_invalidate(str(current_account_d
