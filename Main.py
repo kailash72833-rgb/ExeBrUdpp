@@ -2287,4 +2287,1138 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         print_warning(f"[FUNCTIONAL] Cache miss for {uid_str} -> re-login needed")
                         try:
                             if current_account_data.get('auth_uid'):
-                                cache_invalidate(str(current_account_d
+                                cache_invalidate(str(current_account_data['auth_uid']))
+                            if current_account_data.get('auth_token'):
+                                cache_invalidate(token_key(current_account_data['auth_token']))
+                        except Exception:
+                            pass
+                        raise ConnectionError("Cache expired, triggering fresh login")
+                try:
+                    if uid_str in bot_state.accounts:
+                        live_lv = int(bot_state.accounts[uid_str].get('level', current_level) or current_level)
+                        if live_lv != current_level:
+                            print_info(f"[LEVEL] UID {uid_str}: {current_level} -> {live_lv} (live)")
+                            current_level = live_lv
+                except Exception:
+                    pass
+
+                resolved_ip = await resolve_host_cloudflare(ip)
+                reader, writer = await asyncio.wait_for(asyncio.open_connection(resolved_ip, int(port)), timeout=12)
+                raw_sock = writer.get_extra_info('socket')
+                if raw_sock:
+                    optimize_tcp_socket(raw_sock)
+                writer.write(bytes.fromhex(current_token))
+                await asyncio.wait_for(writer.drain(), timeout=8)
+
+                try:
+                    init_ka = await send_keep_alive(account_region)
+                    if init_ka and writer and not writer.is_closing():
+                        writer.write(init_ka)
+                        await asyncio.wait_for(writer.drain(), timeout=3)
+                except Exception:
+                    pass
+
+                async def func_gateway_keepalive():
+                    ka_bytes = await send_keep_alive(account_region)
+                    while True:
+                        await asyncio.sleep(5)
+                        try:
+                            if writer and not writer.is_closing():
+                                writer.write(ka_bytes)
+                                await writer.drain()
+                        except Exception:
+                            break
+
+                gateway_ping_task = asyncio.create_task(func_gateway_keepalive())
+
+                print_success(
+                    f"[FUNCTIONAL] TCP Gateway Connected for UID: {uid_str} "
+                    f"(DNS: {resolved_ip}, Lvl: {current_level}, Mode: {_MODE})"
+                )
+                reconnects = 0
+                no_response_count = 0
+                last_start_time = 0.0
+                search_started = asyncio.get_running_loop().time()   # when this search began (stall watchdog)
+                stall_limit = SEARCH_STALL_TIMEOUT + random.uniform(0, 30)   # jitter: accounts do not all re-login together
+
+                def _force_fresh_login(reason: str):
+                    """Throw the saved session away and log in again (fixes 'EXP stopped growing')."""
+                    print_warning(f"[SELF-HEAL] UID {uid_str}: {reason} -> fresh login")
+                    if current_account_data:
+                        try:
+                            if current_account_data.get('auth_uid'):
+                                cache_invalidate(str(current_account_data['auth_uid']))
+                            if current_account_data.get('auth_token'):
+                                cache_invalidate(token_key(current_account_data['auth_token']))
+                        except Exception:
+                            pass
+                    raise ConnectionError("Cache expired, " + reason)
+
+                async def send_start_match():
+                    nonlocal search_attempts, last_start_time
+                    search_attempts += 1
+                    current_region = "ID"
+                    mode_tag, _mid, _map = _resolve_mode()
+                    if mode_tag == "LONE_WOLF":
+                        starter_func = start_game_lone_wolf
+                    else:
+                        starter_func = start_game_battle_royale
+                    print_debug(f"[{mode_tag}] Sending StartMatch #{search_attempts} region: {current_region} (Lvl {current_level}, mode={_MODE})")
+                    try:
+                        await asyncio.sleep(random.uniform(0.3, 0.6))
+                        await asyncio.wait_for(
+                            starter_func(current_region, client_version, writer, current_key, current_iv),
+                            timeout=10)
+                        print_debug(f"[{mode_tag}] StartMatch packet sent")
+                        active = await _get_match_count(uid_str)
+                        try:
+                            bot_state.update_status(uid_str, f"SEARCHING ({mode_tag})", active)
+                        except Exception:
+                            pass
+                    except asyncio.TimeoutError:
+                        raise ConnectionError("StartMatch write timed out (dead connection)")
+                    except Exception as e:
+                        print_error(f"start_game error: {e}")
+                    last_start_time = asyncio.get_running_loop().time()
+
+                if not bot_state.is_paused(uid_str):
+                    await send_start_match()
+
+                while True:
+                    if bot_state.is_deleted(uid_str):
+                        print_warning(f"[DELETE] UID {uid_str} deleted -> stopping functional loop")
+                        raise asyncio.CancelledError()
+                    if bot_state.is_stopped(uid_str):
+                        await cancel_play_matches()
+                        print_warning(f"[STOP] UID {uid_str} reached its stop level -> going offline")
+                        return
+                    play_matches[:] = [m for m in play_matches if not m.done()]
+                    active_count = await _get_match_count(uid_str)
+                    try:
+                        bot_state.update_status(uid_str, "ONLINE" if active_count == 0 else "IN_MATCH", active_count)
+                    except Exception:
+                        pass
+
+                    if bot_state.is_paused(uid_str):
+                        await cancel_play_matches()      # a match that is already running is stopped too
+                        search_started = asyncio.get_running_loop().time()   # a pause is not a stall
+                        try:
+                            bot_state.update_status(uid_str, "PAUSED", 0)
+                        except Exception:
+                            pass
+                        if not hasattr(send_start_match, "_pause_logged"):
+                            print_warning(f"[PAUSE] UID {uid_str} paused. Waiting...")
+                            send_start_match._pause_logged = True
+                        await asyncio.sleep(1.0)
+                        continue
+                    else:
+                        if getattr(send_start_match, "_pause_logged", False):
+                            print_success(f"[RESUME] UID {uid_str} resumed.")
+                            send_start_match._pause_logged = False
+
+                    now = asyncio.get_running_loop().time()
+                    # ---- self-heal: old session / search that never finds a match ----
+                    if SEARCH_STALL_TIMEOUT > 0 and now - search_started >= stall_limit:
+                        _force_fresh_login(f"no match for {int(SEARCH_STALL_TIMEOUT)}s")
+                    try:
+                        _cached_at = float((current_account_data or {}).get('cached_at') or 0)
+                    except Exception:
+                        _cached_at = 0.0
+                    if _cached_at and time.time() - _cached_at > TOKEN_CACHE_TTL + 60:
+                        _force_fresh_login("session is older than the allowed age")
+                    if now - last_start_time >= START_MATCH_INTERVAL:
+                        await send_start_match()
+
+                    try:
+                        data = await asyncio.wait_for(reader.read(8192), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        no_response_count += 1
+                        if no_response_count > 40:
+                            print_warning(f"[FUNCTIONAL] Gateway silent ({uid_str}). Reconnecting...")
+                            raise ConnectionError("Gateway idle timeout")
+                        continue
+
+                    if not data:
+                        raise ConnectionError("Connection closed by server")
+
+                    hex_data = data.hex()
+                    packet_length = len(data)
+                    no_response_count = 0
+
+                    if hex_data.startswith("0300") and 10 < packet_length < 30:
+                        print_debug("Match starting, please wait...")
+                        continue
+
+                    if hex_data.startswith("0300") and packet_length >= 300:
+                        print_colored("=" * 60, Colors.GREEN)
+                        print_colored(f"MATCH FOUND! Loading...", Colors.GREEN)
+                        print_colored("=" * 60, Colors.GREEN)
+                        try:
+                            res = json.loads(await decode_protobuf(hex_data[10:]))
+                            token = None
+                            udp_key = None
+                            match_code = None
+                            server_ip_port = None
+                            match_account_id = None
+                            block_val = None
+                            if '42' in res and 'data' in res['42']:
+                                match_code = res['42']['data']
+                            if '5' in res and 'data' in res['5']:
+                                res_field5 = res['5']['data']
+                                server_ip_port = res_field5.get('2', {}).get('data')
+                                udp_key = res_field5.get('3', {}).get('data')
+                                token = res_field5.get('4', {}).get('data')
+                                if '42' in res_field5:
+                                    match_code = res_field5['42']['data']
+                            if '1' in res and 'data' in res['1']:
+                                match_account_id = res['1']['data']
+                            if '5' in res and 'data' in res['5']:
+                                block_val = res['5']['data'].get('1', {}).get('data')
+                            effective_acc_id = match_account_id or account_id or "BD_BOT"
+                            if token and udp_key and match_code and server_ip_port:
+                                acc_tok = ""
+                                if current_account_data:
+                                    acc_tok = current_account_data.get('access_token', '') or ""
+
+                                mode_tag, selected_mode_id, selected_map_id = _resolve_mode()
+                                print_info(f"[MATCH] Mode: {mode_tag} | mode_id={selected_mode_id} | map_id={selected_map_id} | UID: {uid_str}")
+
+                                thunder, sharma = await build_match_startup_packets(
+                                    token, udp_key, match_code, effective_acc_id, block_val or 0,
+                                    server_ip=server_ip_port, region=account_region,
+                                    client_version=client_version, access_token=acc_tok,
+                                    mode_id=selected_mode_id, map_id=selected_map_id
+                                )
+                                match_index = await _inc_match(uid_str)
+                                total = await _get_total_match_count()
+                                print_colored(f"[MATCH #{match_index}] UDP starting ({mode_tag}) -> {server_ip_port}", Colors.CYAN)
+                                print_success(f"[FUNCTIONAL] UDP task started. UID active: {match_index} | Total: {total}")
+                                new_match = asyncio.create_task(
+                                    play_game(
+                                        server_ip_port, thunder, sharma, udp_key, match_code,
+                                        effective_acc_id, "ID", client_version, current_key, current_iv,
+                                        match_index=match_index, on_match_complete=trigger_post_match_refresh
+                                    )
+                                )
+                                play_matches.append(new_match)
+                                consecutive_parse_failures = 0
+                                await _safe_close(writer)
+                                print_info(f"[OFFLINE] {NEW_MATCH_DELAY}s offline -> reload token -> new StartMatch")
+                                await asyncio.sleep(NEW_MATCH_DELAY)
+                                reconnects = 0
+                                break
+                            else:
+                                consecutive_parse_failures += 1
+                                print_warning(f"[FUNCTIONAL] Non-match big packet (#{consecutive_parse_failures}/{MAX_CONSECUTIVE_PARSE_FAILURES}) -> reconnecting | {_packet_info(res, packet_length)}")
+                                if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                                    print_error(f"[FUNCTIONAL] {MAX_CONSECUTIVE_PARSE_FAILURES}x parse failures -> invalidating cache for fresh login")
+                                    if current_account_data:
+                                        try:
+                                            if current_account_data.get('auth_uid'):
+                                                cache_invalidate(str(current_account_data['auth_uid']))
+                                            if current_account_data.get('auth_token'):
+                                                cache_invalidate(token_key(current_account_data['auth_token']))
+                                        except Exception:
+                                            pass
+                                    consecutive_parse_failures = 0
+                                await _safe_close(writer)
+                                await asyncio.sleep(NON_MATCH_RECONNECT_DELAY)
+                                break
+                        except Exception as e:
+                            print_error(f"[FUNCTIONAL] Match packet error: {e}")
+                            consecutive_parse_failures += 1
+                            if consecutive_parse_failures >= MAX_CONSECUTIVE_PARSE_FAILURES:
+                                if current_account_data:
+                                    try:
+                                        if current_account_data.get('auth_uid'):
+                                            cache_invalidate(str(current_account_data['auth_uid']))
+                                        if current_account_data.get('auth_token'):
+                                            cache_invalidate(token_key(current_account_data['auth_token']))
+                                    except Exception:
+                                        pass
+                                consecutive_parse_failures = 0
+                            await _safe_close(writer)
+                            await asyncio.sleep(NON_MATCH_RECONNECT_DELAY)
+                            break
+
+                    if 30 <= packet_length <= 40:
+                        continue
+
+            except asyncio.CancelledError:
+                print_warning(f"[FUNCTIONAL] Cancelled — cancelling {len(play_matches)} UDP matches")
+                for m in play_matches:
+                    if not m.done():
+                        m.cancel()
+                if play_matches:
+                    await asyncio.gather(*play_matches, return_exceptions=True)
+                play_matches.clear()
+                if gateway_ping_task:
+                    gateway_ping_task.cancel()
+                raise
+            except Exception as e:
+                if gateway_ping_task:
+                    gateway_ping_task.cancel()
+                if "Cache expired" in str(e):
+                    print_warning(f"[FUNCTIONAL] ({uid_str}) {e}")
+                else:
+                    print_error(f"[FUNCTIONAL] TCP state ({uid_str}): {e}")
+                play_matches[:] = [m for m in play_matches if not m.done()]
+                if writer:
+                    await _safe_close(writer)
+                if "Cache expired" in str(e):
+                    print_warning(f"[FUNCTIONAL] Triggering re-login for {uid_str}")
+                    break
+                reconnects += 1
+                if reconnects > max_reconnects:
+                    print_error("[FUNCTIONAL] Max reconnects reached, retrying...")
+                    reconnects = 0
+                    await asyncio.sleep(3)
+                    continue
+                await asyncio.sleep(min(reconnects, 2))
+            finally:
+                if gateway_ping_task:
+                    gateway_ping_task.cancel()
+                if writer:
+                    await _safe_close(writer)
+
+    except asyncio.CancelledError:
+        print_warning(f"[FUNCTIONAL] Outer cancelled. {len(play_matches)} UDP matches still running.")
+        for m in play_matches:
+            if not m.done():
+                m.cancel()
+        if play_matches:
+            await asyncio.gather(*play_matches, return_exceptions=True)
+        play_matches.clear()
+        raise
+
+
+async def informational(addrs, starter_packet, key, iv, region="ID", max_reconnects=3):
+    reconnects = 0
+    ip, port = addrs.split(":")
+    while True:
+        writer = None
+        ping_task = None
+        try:
+            resolved_ip = await resolve_host_cloudflare(ip)
+            reader, writer = await asyncio.open_connection(resolved_ip, int(port))
+            raw_sock = writer.get_extra_info('socket')
+            if raw_sock:
+                optimize_tcp_socket(raw_sock)
+            writer.write(bytes.fromhex(starter_packet))
+            await writer.drain()
+            reconnects = 0
+            try:
+                init_ka = await send_keep_alive(region)
+                if init_ka and writer and not writer.is_closing():
+                    writer.write(init_ka)
+                    await asyncio.wait_for(writer.drain(), timeout=3)
+            except Exception:
+                pass
+
+            async def info_keepalive():
+                ka_bytes = await send_keep_alive(region)
+                while True:
+                    await asyncio.sleep(5)
+                    try:
+                        if writer and not writer.is_closing():
+                            writer.write(ka_bytes)
+                            await writer.drain()
+                    except Exception:
+                        break
+            ping_task = asyncio.create_task(info_keepalive())
+            while True:
+                data = await reader.read(8192)
+                if not data:
+                    raise ConnectionError("Connection closed")
+        except asyncio.CancelledError:
+            if ping_task:
+                ping_task.cancel()
+            if writer:
+                await _safe_close(writer)
+            raise
+        except Exception:
+            if ping_task:
+                ping_task.cancel()
+            if writer:
+                await _safe_close(writer)
+            reconnects += 1
+            if reconnects > max_reconnects:
+                await asyncio.sleep(3)
+                reconnects = 0
+            else:
+                await asyncio.sleep(1)
+
+
+# ==================== ACCOUNT PROCESSORS ====================
+def _register_credentials(account_data: Dict):
+    try:
+        acc_id = str(account_data['account_id'])
+        bot_state.account_credentials[acc_id] = account_data
+        if account_data.get('auth_uid'):
+            bot_state.account_credentials[str(account_data['auth_uid'])] = account_data
+        if account_data.get('auth_token'):
+            bot_state.account_credentials[token_key(account_data['auth_token'])] = account_data
+    except Exception:
+        pass
+
+
+async def refresh_account_profile(account_data_or_uid: Any):
+    try:
+        if isinstance(account_data_or_uid, str):
+            uid = str(account_data_or_uid)
+            account_data = bot_state.account_credentials.get(uid)
+        else:
+            account_data = account_data_or_uid
+            uid = str(account_data.get('account_id')) if account_data else "?"
+        if not account_data:
+            print_warning(f"[EXP-REFRESH] No credentials for UID {uid}")
+            return
+        url = account_data.get('server_url')
+        token = account_data.get('token')
+        release_version = account_data.get('release_version')
+        payload = account_data.get('login_payload_data')
+        if not (url and token and release_version and payload):
+            print_warning(f"[EXP-REFRESH] Missing fields for {uid}")
+            return
+        res = None
+        try:
+            async with _refresh_sem:
+                res = await send_getlogin(payload, url, token, release_version,
+                                          style=account_data.get('login_style') or 'legacy')
+        except Exception as e:
+            print_error(f"[EXP-REFRESH] send_getlogin exception for {uid}: {e}")
+            return
+        if not res:
+            print_warning(f"[EXP-REFRESH] GetLoginData returned None for {uid}")
+            return
+        res_proto, dict_res = res
+
+        def _safe_int(v, default):
+            try:
+                if v is None or v == "":
+                    return default
+                return int(v)
+            except Exception:
+                return default
+
+        level = _safe_int(get_proto_field(dict_res, 6, None), None)
+        exp = _safe_int(get_proto_field(dict_res, 7, None), None)
+        likes = _safe_int(get_proto_field(dict_res, 8, None), None)
+        nickname = ""
+        try:
+            nickname = res_proto.nickname or get_proto_field(dict_res, 4, "") or ""
+        except Exception:
+            nickname = ""
+        if level is None and exp is None:
+            print_warning(f"[EXP-REFRESH] No level/exp field parsed for {uid}")
+            return
+        level = level if level is not None else 1
+        exp = exp if exp is not None else 0
+        likes = likes if likes is not None else 0
+        acc_id = str(account_data['account_id'])
+        old_level = 0
+        old_exp = 0
+        try:
+            if acc_id in bot_state.accounts:
+                old_level = int(bot_state.accounts[acc_id].get('level', 0) or 0)
+                old_exp = int(bot_state.accounts[acc_id].get('current_exp', 0) or 0)
+        except Exception:
+            pass
+        try:
+            bot_state.update_exp(acc_id, exp, level)
+        except Exception as e:
+            print_error(f"[EXP-REFRESH] update_exp failed for {acc_id}: {e}")
+        try:
+            stop_lv = int((bot_state.accounts.get(acc_id) or {}).get('stop_level') or 0)
+            if stop_lv and level >= stop_lv and not bot_state.is_stopped(acc_id):
+                bot_state.mark_stopped(acc_id, level)
+                print_warning(f"[STOP] UID {acc_id}: level {level} reached the stop level {stop_lv} -> stopping (not deleting)")
+        except Exception as e:
+            print_warning(f"[STOP] check failed for {acc_id}: {e}")
+        if likes > 0 and acc_id in bot_state.accounts:
+            try:
+                bot_state.accounts[acc_id]["likes"] = likes
+            except Exception:
+                pass
+        if nickname and acc_id in bot_state.accounts:
+            try:
+                bot_state.accounts[acc_id]["nickname"] = nickname
+            except Exception:
+                pass
+        _update_cache_profile(account_data, level, exp)
+        account_data['level'] = level
+        account_data['exp'] = exp
+        if likes > 0:
+            account_data['likes'] = likes
+        if nickname:
+            account_data['nickname'] = nickname
+        if old_level > 0 and level > old_level:
+            print_success(f"[LEVEL UP] UID {acc_id} : Lvl {old_level} -> {level} (EXP {old_exp} -> {exp})")
+        elif old_exp != exp:
+            print_success(f"[EXP] UID {acc_id} Lvl {level} | EXP {old_exp} -> {exp} (+{exp - old_exp})")
+    except Exception as e:
+        print_error(f"refresh_account_profile error: {e}")
+        traceback.print_exc()
+
+
+# ==================== LEVEL RULES (max level to add / auto-stop level) ====================
+def _gate_level(login_key, level: int):
+    """Decide what to do with an account that just logged in.
+    'ok' = run it, 'reject' = level is above the max level to add -> never added, 'stop' = already at its stop level."""
+    lim = bot_state.account_limits.get(str(login_key))
+    if not lim:
+        return "ok", ""
+    mx = int(lim.get("max") or 0)
+    hi = int(lim.get("stop") or 0)
+    if lim.get("accepted"):                       # accepted before (e.g. after a restart): only the stop rule matters
+        if hi and level >= hi:
+            return "stop", f"reached stop level {hi}"
+        return "ok", ""
+    if mx and level > mx:                         # max 21 -> level 21 or lower can be added
+        return "reject", f"Level {level} is too high: max level {mx} (only level {mx} or lower can be added)"
+    if hi and level >= hi:
+        return "reject", f"Level {level} has already reached the stop level {hi}"
+    return "ok", ""
+
+
+def _limit_kwargs(login_key) -> Dict:
+    lim = bot_state.account_limits.get(str(login_key)) or {}
+    return {"stop_level": int(lim.get("stop") or 0), "max_level": int(lim.get("max") or 0)}
+
+
+def _persist_accepted(login_key):
+    try:
+        entries = _read_accounts()
+        changed = False
+        for e in entries:
+            k = str(e.get("uid")) if e.get("uid") else token_key(e.get("token", ""))
+            if k == str(login_key) and not e.get("accepted"):
+                e["accepted"] = True
+                changed = True
+        if changed:
+            _write_accounts(entries)
+    except Exception as ex:
+        print_warning(f"[LEVEL] could not save accepted flag: {ex}")
+
+
+def _finish_gate(login_key, acc_id, level: int, gate: str):
+    """Called right after the account was registered."""
+    lim = bot_state.account_limits.get(str(login_key))
+    if not lim:
+        return
+    if gate == "stop":
+        bot_state.mark_stopped(acc_id, level)
+    elif not lim.get("accepted"):
+        lim["accepted"] = True
+        _persist_accepted(login_key)
+
+
+async def _reject_login(login_key, display_uid, owner_id, reason: str):
+    """The account's level is outside the allowed range: remove it completely, as if it was never added."""
+    ids = {str(login_key), str(display_uid)}
+    print_warning(f"[LEVEL] {display_uid}: {reason} -> NOT added")
+    try:
+        _write_accounts([e for e in _read_accounts() if not (_entry_ids(e) & ids)])
+    except Exception as ex:
+        print_warning(f"[LEVEL] could not clean accounts file: {ex}")
+    bot_state.mark_deleted(ids)
+    bot_state.account_workers.pop(str(login_key), None)
+    bot_state.account_limits.pop(str(login_key), None)
+    bot_state.reject_account(login_key, display_uid, owner_id, reason)
+    cb = bot_state.refresh_callbacks.get("on_account_deleted")
+    if cb:
+        try:
+            await cb(ids)
+        except Exception as ex:
+            print_warning(f"[LEVEL] cleanup failed: {ex}")
+
+
+async def process_account_uid_pass(uid: str, password: str,
+                                    owner_user_id: str = "", owner_username: str = "",
+                                    mode: str = "auto") -> Optional[Dict]:
+    cached = cache_get(uid)
+    if cached:
+        print_success(f"[CACHE HIT] UID {uid} loaded from token_cache.json (no login)")
+        acc_id = str(cached['account_id'])
+        c_level = int(cached.get('level', 1) or 1)
+        gate, why = _gate_level(uid, c_level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
+        bot_state.register_account(
+            uid=acc_id, nickname=cached.get('nickname', f"Player_{acc_id}"),
+            region=cached.get('region', 'ID'), level=c_level,
+            exp=cached.get('exp', 0), likes=cached.get('likes', 0),
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(uid)
+        )
+        _register_credentials(cached)
+        _finish_gate(uid, acc_id, c_level, gate)
+        return dict(cached, _gate="stop") if gate == "stop" else cached
+    print_info(f"[LOGIN] Full login for UID {uid}...")
+    try:
+        verconfig_res = await version_config()
+        if verconfig_res is None:
+            print_error(f"[LOGIN] version_config failed for UID {uid}")
+            return None
+        release_version, client_version, server_url = verconfig_res
+        tokengrant_response = await get_access_token(uid, password)
+        if tokengrant_response is None:
+            print_error(f"[LOGIN] get_access_token failed for UID {uid}")
+            return None
+        open_id, access_token, platform = tokengrant_response
+        device_info = get_device_for_account(uid)
+        seq = await login_sequence(open_id, access_token, platform, client_version, device_info,
+                                   release_version, server_url, tag=f"UID {uid}")
+        if seq is None:
+            print_error(f"[LOGIN] MajorLogin / GetLoginData failed for UID {uid}")
+            return None
+        majorlogin_response, getlogin_result, login_payload_data, login_style = seq
+        res_proto, dict_res = getlogin_result
+        acc_id = str(majorlogin_response.account_id)
+        level = int(get_proto_field(dict_res, 6, 1) or 1)
+        exp = int(get_proto_field(dict_res, 7, 0) or 0)
+        likes = int(get_proto_field(dict_res, 8, 0) or 0)
+        nickname = res_proto.nickname or get_proto_field(dict_res, 4, f"Player_{acc_id}")
+        region = majorlogin_response.region or get_proto_field(dict_res, 3, "ID")
+        gate, why = _gate_level(uid, level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
+        bot_state.register_account(
+            uid=acc_id, nickname=nickname, region=region, level=level, exp=exp, likes=likes,
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(uid)
+        )
+        mode_label = _mode_label(mode, level)
+        print_success(f"[OK] Login Success: UID {acc_id} | {nickname} | Lvl {level} | Mode: {mode_label}")
+        account_data = {
+            'account_id': majorlogin_response.account_id, 'nickname': nickname,
+            'region': region, 'level': level, 'exp': exp, 'likes': likes,
+            'open_id': open_id, 'access_token': access_token, 'platform': str(platform),
+            'token': majorlogin_response.token, 'server_time': majorlogin_response.server_time,
+            'aes_ak': majorlogin_response.aes_ak, 'iv_i': majorlogin_response.iv_i,
+            'functional_addrs': res_proto.functional_addrs or get_proto_field(dict_res, 14),
+            'informational_addrs': res_proto.informational_addrs or get_proto_field(dict_res, 32),
+            'release_version': release_version, 'client_version': client_version,
+            'server_url': majorlogin_response.url, 'login_payload_data': login_payload_data,
+            'login_style': login_style,
+            'auth_type': 'guest', 'auth_uid': uid, 'auth_password': password,
+            'mode': mode, 'owner_user_id': owner_user_id, 'owner_username': owner_username,
+        }
+        _register_credentials(account_data)
+        cache_set(uid, account_data)
+        _finish_gate(uid, acc_id, level, gate)
+        return dict(account_data, _gate="stop") if gate == "stop" else account_data
+    except Exception as e:
+        print_error(f"process_account_uid_pass error: {e}")
+        traceback.print_exc()
+        return None
+
+
+async def process_account_token(access_token: str,
+                                 owner_user_id: str = "", owner_username: str = "",
+                                 mode: str = "auto") -> Optional[Dict]:
+    cache_key = token_key(access_token)
+    cached = cache_get(cache_key)
+    if cached:
+        print_success(f"[CACHE HIT] Token {access_token[:10]}... loaded from cache")
+        acc_id = str(cached['account_id'])
+        c_level = int(cached.get('level', 1) or 1)
+        gate, why = _gate_level(cache_key, c_level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
+        bot_state.register_account(
+            uid=acc_id, nickname=cached.get('nickname', f"Player_{acc_id}"),
+            region=cached.get('region', 'ID'), level=c_level,
+            exp=cached.get('exp', 0), likes=cached.get('likes', 0),
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(cache_key)
+        )
+        _register_credentials(cached)
+        _finish_gate(cache_key, acc_id, c_level, gate)
+        return dict(cached, _gate="stop") if gate == "stop" else cached
+    print_info("[LOGIN] Full login with Access Token...")
+    try:
+        verconfig_res = await version_config()
+        if verconfig_res is None:
+            print_error("[LOGIN] version_config failed (token flow)")
+            return None
+        release_version, client_version, server_url = verconfig_res
+        import requests
+        data = {"error": "no answer"}
+        for _base in TOKEN_INSPECT_URLS:
+            _host = urlparse(_base).hostname
+            hdrs = {
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "close",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": _host,
+                "User-Agent": "GarenaMSDK/4.0.19P4(G011A ;Android 9;en;US;)"
+            }
+            try:
+                resp = await asyncio.to_thread(requests.get, f"{_base}?token={access_token}", headers=hdrs, timeout=10)
+                data = resp.json()
+            except Exception as _e:
+                data = {"error": f"{type(_e).__name__}"}
+            if isinstance(data, dict) and 'error' not in data:
+                break
+        if 'error' in data:
+            print_error(f"[LOGIN] Token inspect error: {data.get('error')}")
+            return None
+        open_id = data.get('open_id')
+        platform = data.get('platform', 4)
+        if not open_id:
+            print_error("[LOGIN] No open_id in token inspect response")
+            return None
+        device_info = get_device_for_account(open_id)
+        seq = await login_sequence(open_id, access_token, str(platform), client_version, device_info,
+                                   release_version, server_url, tag="token flow")
+        if seq is None:
+            print_error("[LOGIN] MajorLogin / GetLoginData failed (token flow)")
+            return None
+        majorlogin_response, getlogin_result, login_payload_data, login_style = seq
+        res_proto, dict_res = getlogin_result
+        acc_id = str(majorlogin_response.account_id)
+        level = int(get_proto_field(dict_res, 6, 1) or 1)
+        exp = int(get_proto_field(dict_res, 7, 0) or 0)
+        likes = int(get_proto_field(dict_res, 8, 0) or 0)
+        nickname = res_proto.nickname or get_proto_field(dict_res, 4, f"Player_{acc_id}")
+        region = majorlogin_response.region or get_proto_field(dict_res, 3, "ID")
+        gate, why = _gate_level(cache_key, level)
+        if gate == "reject":
+            return {"_gate": "reject", "_reason": why}
+        bot_state.register_account(
+            uid=acc_id, nickname=nickname, region=region, level=level, exp=exp, likes=likes,
+            mode=mode, owner_user_id=owner_user_id, owner_username=owner_username,
+            **_limit_kwargs(cache_key)
+        )
+        mode_label = _mode_label(mode, level)
+        print_success(f"[OK] Login Success (Token): UID {acc_id} | {nickname} | Lvl {level} | Mode: {mode_label}")
+        account_data = {
+            'account_id': majorlogin_response.account_id, 'nickname': nickname,
+            'region': region, 'level': level, 'exp': exp, 'likes': likes,
+            'open_id': open_id, 'access_token': access_token, 'platform': str(platform),
+            'token': majorlogin_response.token, 'server_time': majorlogin_response.server_time,
+            'aes_ak': majorlogin_response.aes_ak, 'iv_i': majorlogin_response.iv_i,
+            'functional_addrs': res_proto.functional_addrs or get_proto_field(dict_res, 14),
+            'informational_addrs': res_proto.informational_addrs or get_proto_field(dict_res, 32),
+            'release_version': release_version, 'client_version': client_version,
+            'server_url': majorlogin_response.url, 'login_payload_data': login_payload_data,
+            'login_style': login_style,
+            'auth_type': 'token', 'auth_token': access_token,
+            'mode': mode, 'owner_user_id': owner_user_id, 'owner_username': owner_username,
+        }
+        _register_credentials(account_data)
+        cache_set(cache_key, account_data)
+        _finish_gate(cache_key, acc_id, level, gate)
+        return dict(account_data, _gate="stop") if gate == "stop" else account_data
+    except Exception as e:
+        print_error(f"process_account_token error: {e}")
+        traceback.print_exc()
+        return None
+
+
+def _mode_label(mode: str, level: int) -> str:
+    m = str(mode or "auto").lower()
+    if m == "br":
+        return "Battle Royale (locked)"
+    if m == "lw":
+        return "Lone Wolf (locked)"
+    return "Lone Wolf" if level >= LONE_WOLF_UNLOCK_LEVEL else "Battle Royale"
+
+
+def _worker_ids(account_data: Dict) -> List[str]:
+    tok = account_data.get('auth_token') or ''
+    return [str(x) for x in (account_data.get('account_id'), account_data.get('auth_uid'), tok, token_key(tok) if tok else '') if x]
+
+
+async def _wait_until_allowed(owner_id: str, *ids) -> bool:
+    """Block while the owner's plan is expired / the account is over its slot limit.
+    Returns False if the account was deleted meanwhile."""
+    announced = False
+    while bot_state.is_blocked(owner_id, *ids):
+        if bot_state.is_deleted(*ids):
+            return False
+        if not announced:
+            print_warning(f"[PLAN] {ids[0]} stopped: plan expired or over slot limit. Waiting for renewal...")
+            announced = True
+        try:
+            bot_state.update_status(str(ids[0]), "EXPIRED", 0)
+        except Exception:
+            pass
+        await asyncio.sleep(PLAN_GUARD_INTERVAL * 2)
+    if announced:
+        print_success(f"[PLAN] {ids[0]} allowed again -> starting")
+    return True
+
+
+async def run_account_worker(account_data: Dict, label: str, mode: str = "auto", owner_user_id: str = ""):
+    acc_id = str(account_data['account_id'])
+    owner_id = str(owner_user_id or account_data.get('owner_user_id') or "")
+    informational_task = None
+    exp_task = None
+    functional_task = None
+    guard_task = None
+    try:
+        reg = account_data.get('region', 'ID')
+        tcp_packet_online = await build_tcp_startup_packet(
+            account_data['account_id'], account_data['token'], account_data['server_time'],
+            account_data['aes_ak'], account_data['iv_i'], region=reg, typ='OnLine'
+        )
+        tcp_packet_chat = await build_tcp_startup_packet(
+            account_data['account_id'], account_data['token'], account_data['server_time'],
+            account_data['aes_ak'], account_data['iv_i'], region=reg, typ='ChaT'
+        )
+        informational_task = asyncio.create_task(
+            informational(account_data['informational_addrs'], tcp_packet_chat,
+                          account_data['aes_ak'], account_data['iv_i'], region=reg)
+        )
+
+        def _next_exp_delay() -> float:
+            # few accounts -> every 12s; hundreds of accounts -> slower (max 45s) + random spread
+            n = max(1, len(bot_state.accounts))
+            base = max(EXP_REFRESH_INTERVAL, min(EXP_REFRESH_MAX_INTERVAL, n * 0.12))
+            return base + random.uniform(0, base * 0.25)
+
+        async def exp_refresher():
+            try:
+                fresh = bot_state.account_credentials.get(acc_id)
+                if fresh:
+                    await refresh_account_profile(fresh)
+            except Exception as e:
+                print_warning(f"[EXP-REFRESH] initial refresh error ({acc_id}): {e}")
+            while True:
+                await asyncio.sleep(_next_exp_delay())
+                if bot_state.is_deleted(acc_id):
+                    return
+                try:
+                    fresh = bot_state.account_credentials.get(acc_id)
+                    if fresh:
+                        await refresh_account_profile(fresh)
+                except Exception as e:
+                    print_warning(f"[EXP-REFRESH] periodic refresh error ({acc_id}): {e}")
+
+        async def plan_guard():
+            while True:
+                await asyncio.sleep(PLAN_GUARD_INTERVAL)
+                if bot_state.is_blocked(owner_id, *_worker_ids(account_data)):
+                    return True
+
+        exp_task = asyncio.create_task(exp_refresher())
+        functional_task = asyncio.create_task(
+            functional_lone_wolf(
+                account_data['functional_addrs'], tcp_packet_online,
+                account_data['region'], account_data['client_version'],
+                account_data['aes_ak'], account_data['iv_i'],
+                account_id=acc_id, account_data=account_data,
+                account_level=int(account_data.get('level', 2) or 2),
+                mode=mode
+            )
+        )
+        guard_task = asyncio.create_task(plan_guard())
+        done, _pending = await asyncio.wait({functional_task, guard_task}, return_when=asyncio.FIRST_COMPLETED)
+        if guard_task in done and not functional_task.done():
+            print_warning(f"[PLAN] {acc_id} stopped: plan expired or over slot limit")
+            functional_task.cancel()
+            try:
+                await functional_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                bot_state.update_status(acc_id, "EXPIRED", 0)
+            except Exception:
+                pass
+        else:
+            await functional_task          # re-raises errors exactly like before
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print_error(f"run_account_worker error for {label}: {e}")
+    finally:
+        tasks = (informational_task, exp_task, functional_task, guard_task)
+        for t in tasks:
+            if t and not t.done():
+                t.cancel()
+        for t in tasks:
+            if t:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+
+async def account_loop_guest(uid: str, password: str, mode: str = "auto",
+                              owner_user_id: str = "", owner_username: str = ""):
+    fail_count = 0
+    bot_state.add_pending(uid, uid, owner_user_id, owner_username, mode)    # visible at once as "CONNECTING"
+    await asyncio.sleep(random.uniform(0, 2.0))          # spread the start-up of many accounts
+    while True:
+        if bot_state.is_deleted(uid):
+            print_warning(f"[DELETE] Guest UID {uid} deleted -> worker exit")
+            break
+        try:
+            if not await _wait_until_allowed(owner_user_id, uid):
+                print_warning(f"[DELETE] Guest UID {uid} deleted while waiting -> worker exit")
+                break
+            print_info(f"[LOGIN] Starting login for Guest UID: {uid} (mode: {mode})...")
+            try:
+                bot_state.update_status(str(uid), "CONNECTING")
+            except Exception:
+                pass
+            async with _login_sem:                       # fair queue: max LOGIN_CONCURRENCY logins at once
+                if bot_state.is_deleted(uid):
+                    continue
+                account_data = await process_account_uid_pass(
+                    uid, password, owner_user_id=owner_user_id,
+                    owner_username=owner_username, mode=mode
+                )
+            if bot_state.is_deleted(uid, (account_data or {}).get('account_id')):
+                print_warning(f"[DELETE] Guest UID {uid} deleted during login -> worker exit")
+                break
+            gate = (account_data or {}).get("_gate")
+            if gate == "reject":                         # level outside the allowed range -> never added
+                await _reject_login(uid, uid, owner_user_id, account_data.get("_reason", "Level not allowed"))
+                break
+            if not account_data:
+                fail_count += 1
+                delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
+                print_error(f"Login failed for UID: {uid}. Retrying in {delay} seconds...")
+                bot_state.set_pending(uid, "LOGIN_FAILED", "Login failed. Check UID / password. Retrying...")
+                try:
+                    bot_state.update_status(str(uid), "ERROR")
+                except Exception:
+                    pass
+                await asyncio.sleep(delay + random.uniform(0, 3))
+                continue
+            fail_count = 0
+            bot_state.clear_pending(uid)
+            if gate == "stop":                           # restart: already at its stop level -> stays STOPPED
+                print_warning(f"[STOP] UID {uid}: stop level reached -> not running")
+                break
+            await run_account_worker(account_data, uid, mode=mode, owner_user_id=owner_user_id)
+            if bot_state.is_stopped(account_data.get('account_id')):
+                print_warning(f"[STOP] UID {uid}: stop level reached -> worker finished (account kept, status STOPPED)")
+                break
+            print_warning(f"Session finished for {uid}. Reconnecting in 3s...")
+            await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            print_warning(f"Worker for {uid} stopped.")
+            bot_state.clear_pending(uid)
+            try:
+                bot_state.update_status(str(uid), "OFFLINE")
+            except Exception:
+                pass
+            break
+        except Exception as e:
+            print_error(f"Error for UID {uid}: {e}. Retrying in 10s...")
+            await asyncio.sleep(10)
+
+
+async def account_loop_token(token: str, mode: str = "auto",
+                              owner_user_id: str = "", owner_username: str = ""):
+    token_label = token_key(token)
+    fail_count = 0
+    bot_state.add_pending(token_label, token_label, owner_user_id, owner_username, mode)
+    await asyncio.sleep(random.uniform(0, 2.0))
+    while True:
+        if bot_state.is_deleted(token, token_label):
+            print_warning(f"[DELETE] Token {token_label} deleted -> worker exit")
+            break
+        try:
+            if not await _wait_until_allowed(owner_user_id, token_label, token):
+                print_warning(f"[DELETE] Token {token_label} deleted while waiting -> worker exit")
+                break
+            print_info(f"[LOGIN] Starting login with Access Token (mode: {mode})...")
+            async with _login_sem:
+                if bot_state.is_deleted(token, token_label):
+                    continue
+                account_data = await process_account_token(
+                    token, owner_user_id=owner_user_id,
+                    owner_username=owner_username, mode=mode
+                )
+            if bot_state.is_deleted(token, token_label, (account_data or {}).get('account_id')):
+                print_warning(f"[DELETE] Token {token_label} deleted during login -> worker exit")
+                break
+            gate = (account_data or {}).get("_gate")
+            if gate == "reject":
+                await _reject_login(token_label, token_label, owner_user_id, account_data.get("_reason", "Level not allowed"))
+                break
+            if not account_data:
+                fail_count += 1
+                delay = min(LOGIN_BACKOFF_MAX, 15 * (2 ** min(fail_count - 1, 4)))
+                print_error(f"Login failed for Token. Retrying in {delay} seconds...")
+                bot_state.set_pending(token_label, "LOGIN_FAILED", "Login failed. Token may be expired. Retrying...")
+                await asyncio.sleep(delay + random.uniform(0, 3))
+                continue
+            fail_count = 0
+            bot_state.clear_pending(token_label)
+            acc_id = str(account_data['account_id'])
+            if gate == "stop":
+                print_warning(f"[STOP] UID {acc_id}: stop level reached -> not running")
+                break
+            await run_account_worker(account_data, acc_id, mode=mode, owner_user_id=owner_user_id)
+            if bot_state.is_stopped(acc_id):
+                print_warning(f"[STOP] UID {acc_id}: stop level reached -> worker finished (account kept, status STOPPED)")
+                break
+            print_warning("Token session finished. Reconnecting in 3s...")
+            await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            print_warning(f"Worker for token {token_label} stopped.")
+            bot_state.clear_pending(token_label)
+            break
+        except Exception as e:
+            print_error(f"Token error: {e}. Retrying in 10s...")
+            await asyncio.sleep(10)
+
+
+def load_accounts():
+    accounts = []
+    try:
+        accounts = [a for a in _read_accounts() if isinstance(a, dict)]       # MongoDB (or local file when no MongoDB)
+    except Exception as e:
+        print_error(f"Could not load accounts: {e}")
+    if not accounts and FALLBACK_UID and FALLBACK_PASSWORD:
+        accounts.append({"uid": FALLBACK_UID, "password": FALLBACK_PASSWORD})
+    return accounts
+
+
+# ==================== MAIN ====================
+async def main():
+    print_colored("=" * 60, Colors.CYAN)
+    print_colored("    EXE LEVEL UP - FreeFire Bot (Web Dashboard Mode)", Colors.GREEN)
+    print_colored("   Persistent Device ID + TRUE Parallel + Smart DNS", Colors.WHITE)
+    print_colored("=" * 60, Colors.CYAN)
+    print_info(f"Start Match Interval: {START_MATCH_INTERVAL}s")
+    print_info(f"Login mode: {LOGIN_MODE} (order {'>'.join(LOGIN_MODE_ORDER)}) | region: {LOGIN_REGION} | PlAy_VeR: {PLAY_VER} | "
+               f"APP_VERSION override: {','.join(_env_app_versions()) or '-'} | login code {LOGIN_CODE_VERSION}")
+    print_info(f"Offline Wait: {NEW_MATCH_DELAY}s (after match found)")
+    print_info(f"EXP Refresh: {EXP_REFRESH_INTERVAL}s interval (auto-slower with many accounts) + post-match trigger")
+    print_info(f"Login queue: {LOGIN_CONCURRENCY} at a time | Refresh queue: {REFRESH_CONCURRENCY} at a time")
+    print_info("Device System: 1 ID = 1 Persistent Device ID (devices.json)")
+    print_colored("-" * 60, Colors.MAGENTA)
+    print_info("MODE SWITCH:")
+    print_info("   * auto  -> BR (Lvl<3) / LW (Lvl>=3)")
+    print_info("   * br    -> Battle Royale only")
+    print_info("   * lw    -> Lone Wolf only")
+    print_colored("=" * 60, Colors.CYAN)
+
+    main_task = asyncio.current_task()
+    try:
+        loop = asyncio.get_running_loop()
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(_sig, main_task.cancel)     # clean save on Render / Railway restarts
+    except Exception:
+        pass
+
+    try:
+        await start_web_dashboard(host=WEB_HOST, port=WEB_PORT)
+        print_success(f"Web Dashboard live at port {WEB_PORT}")
+    except Exception as e:
+        print_error(f"Could not start web dashboard: {e}")
+
+    flusher_task = asyncio.create_task(token_cache_flusher())
+
+    async def on_account_added_handler(data):
+        mode = str(data.get("mode", "auto")).strip().lower()
+        if mode not in ("auto", "br", "lw"):
+            mode = "auto"
+        owner_id = str(data.get("owner_user_id", "") or "")
+        owner_name = str(data.get("owner_username", "") or "")
+
+        async def _replace_worker(key, coro):
+            old = bot_state.account_workers.pop(key, None)
+            if old and not old.done():
+                old.cancel()
+                await asyncio.wait([old], timeout=10)
+            bot_state.account_workers[key] = asyncio.create_task(coro)
+
+        if "token" in data and data["token"]:
+            t = str(data["token"]).strip()
+            await _replace_worker(token_key(t), account_loop_token(
+                t, mode=mode, owner_user_id=owner_id, owner_username=owner_name
+            ))
+        elif "uid" in data and "password" in data:
+            u = str(data["uid"]).strip()
+            p = str(data["password"]).strip()
+            await _replace_worker(u, account_loop_guest(
+                u, p, mode=mode, owner_user_id=owner_id, owner_username=owner_name
+            ))
+
+    async def on_refresh_account_handler(uid):
+        await refresh_account_profile(uid)
+
+    async def on_account_deleted_handler(ids):
+        ids = {str(i) for i in ids}
+        for key in list(_load_token_cache().keys()):
+            if key in ids:
+                cache_invalidate(key)
+        try:
+            devices = persist_store.load("devices", DEVICES_FILE, {})
+            remaining = {k: v for k, v in devices.items() if k not in ids}
+            if len(remaining) != len(devices):
+                persist_store.save("devices", DEVICES_FILE, remaining)
+        except Exception as e:
+            print_error(f"[DELETE] devices cleanup failed: {e}")
+        async with _match_counter_lock:
+            for i in ids:
+                _match_counters.pop(i, None)
+        print_success(f"[DELETE] Account fully wiped: {', '.join(sorted(i for i in ids if not i.startswith('tok_')))[:120]}")
+
+    bot_state.refresh_callbacks["on_account_added"] = on_account_added_handler
+    bot_state.refresh_callbacks["on_account_deleted"] = on_account_deleted_handler
+    bot_state.refresh_callbacks["on_refresh_account"] = on_refresh_account_handler
+
+    accounts = load_accounts()
+    if not accounts:
+        print_warning("No accounts saved yet. Add them from the Web Dashboard.")
+
+    for acc in accounts:
+        mode = str(acc.get("mode", "auto")).strip().lower()
+        if mode not in ("auto", "br", "lw"):
+            mode = "auto"
+        owner_id = str(acc.get("owner_user_id", "") or "")
+        owner_name = str(acc.get("owner_username", "") or "")
+        if acc.get("max_level") or acc.get("stop_level"):
+            _lk = token_key(acc["token"]) if acc.get("token") else str(acc.get("uid", ""))
+            bot_state.account_limits[_lk] = {"max": int(acc.get("max_level") or 0),
+                                             "stop": int(acc.get("stop_level") or 0),
+                                             "accepted": bool(acc.get("accepted"))}
+        if "token" in acc and acc["token"]:
+            t = asyncio.create_task(account_loop_token(
+                acc["token"], mode=mode, owner_user_id=owner_id, owner_username=owner_name
+            ))
+            bot_state.account_workers[token_key(acc["token"])] = t
+        elif "uid" in acc and "password" in acc and acc["uid"]:
+            u = str(acc["uid"])
+            t = asyncio.create_task(account_loop_guest(
+                u, acc["password"], mode=mode, owner_user_id=owner_id, owner_username=owner_name
+            ))
+            bot_state.account_workers[u] = t
+
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print_warning("\n[STOP] Shutting down all accounts...")
+        for t in list(bot_state.account_workers.values()):
+            t.cancel()
+        await asyncio.gather(*bot_state.account_workers.values(), return_exceptions=True)
+        flusher_task.cancel()
+        try:
+            _flush_token_cache_sync()
+            await user_store.flush_now()
+            try:
+                import dashboard_server as _ds
+                _ds._save_stats_now()                       # EXP gained / matches per account
+            except Exception as e:
+                print_warning(f"[STORAGE] stats save at shutdown failed: {e}")
+            await asyncio.to_thread(persist_store.flush, 8.0)   # accounts / orders / devices -> MongoDB
+        except Exception as e:
+            print_error(f"Final save failed: {e}")
+        print_success("All sessions cleanly closed.")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print_warning("\nProgram stopped by user.")
