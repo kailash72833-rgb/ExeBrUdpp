@@ -26,8 +26,10 @@ so the server rewrites plans.json once.
 - `SEARCH_STALL_TIMEOUT` (default 240) seconds without a match before the bot logs in again by itself
 - `VERBOSE_LOGS=1` (optional) shows every search packet in the log (off by default)
 - `APP_VERSION` (optional) force the Free Fire app version used for the version lookup, e.g. `1.132.11`. Normally NOT needed (see "Login / version" below).
-- `LOGIN_MODE` (optional, default `auto`): `auto` | `lean` | `full` | `legacy`, see "Login / version" below.
+- `LOGIN_MODE` (optional, default `auto`): `auto` | `web` | `lean` | `full` | `legacy`, see "Login / version" below.
 - `PLAY_VER` (optional, default `1.132.1`): value of the `PlAy_VeR` header of the new login.
+- `LOGIN_REGION` (optional, default `ID`): `region` sent to the version server and in the login body (field 26); also picks `lang`. Set `IND` if your accounts are India-server accounts.
+- `LOGIN_SERVER_URL` (optional): force the MajorLogin server, e.g. `https://loginbp.ppmainecoonghj.com/`. Normally NOT needed.
 
 ## Data storage (survives restarts / redeploys)
 - Everything that matters is saved in MongoDB (`persist.py`): accounts, order history, free-plan requests, device ids, token cache, EXP gained / matches per account (plus users and sessions).
@@ -46,18 +48,22 @@ Run: `pip install -r requirements.txt && python Main.py`
 - Both are optional (tick *Additional settings*), also for bulk add. Off = same behaviour as before.
 - `GZIP=0` turns response compression off if your proxy already compresses.
 
-## Login / version (v8)
+## Login / version (v9)
 **Version lookup.** The app version is asked from the Play Store; a wrong value ("Varies with device", an unknown 2.x.x) is ignored and the version server is asked with a list of candidates until it answers with a login server: `APP_VERSION` -> Play Store -> last version that worked -> built-in fallbacks (`DEFAULT_FALLBACK_VERSIONS`, edit after a new OB). Log: `[VERSION] OK app=... remote=... release=... server=...`.
 
-**New MajorLogin (OB55).** The bot has three login styles and `LOGIN_MODE=auto` tries them in this order, remembers the one that works and starts with it next time:
-1. `lean`   - the small LoginReq (open_id, open_id_type, login_token, orign_platform_type) + the new headers (`PlAy_VeR`, `Ob_VeR`, `X-Ga-Sv`, ...). Guest token comes from `ffmconnect.live.gop.garenanow.com` (old `100067.connect.garena.com` is the fallback).
-2. `full`   - the big old payload, but with the new headers.
-3. `legacy` - exactly the old login (old payload + old headers + old Host).
-A mode is accepted only if MajorLogin answers with token + account id + `aes_ak` / `iv_i` / `server_time` (needed for the game gateway) AND GetLoginData returns a gateway address. Set `LOGIN_MODE=lean` (or `full` / `legacy`) to force one style and never fall back.
+**Login modes (OB55).** `LOGIN_MODE=auto` tries the modes in this order, remembers the one that works and starts with it next time:
+1. `web`    - the login of Web.zip: OB55 payload (build values 57/60-67/77/83/94/95/102/104 of 1.132.x) + `vercfg_sign`, `cdn_url`, `abhotupdate_cdn_url`, `client_ip` taken LIVE from the version server (`channel=3rd_party`, whitelist 1.7.0, device data) + new headers (`X-GA-SV` = current time, no `Expect`) + GetLoginData body with the jwt (field 108). MajorLogin servers: the version server's address, then `loginbp.ggpolarbear.com`; GetLoginData: the address in the MajorLogin answer, then the region's client address. An AES-encrypted answer is decrypted automatically. Each account keeps its own device id (field 19).
+2. `lean`   - small LoginReq (open_id, open_id_type, login_token, orign_platform_type) + `PlAy_VeR` / `Ob_VeR` headers. Guest token from `ffmconnect.live.gop.garenanow.com` (old `100067.connect.garena.com` is the fallback).
+3. `full`   - the big OLD payload, but with the lean headers.
+4. `legacy` - exactly the old login (old payload + old headers + old Host).
+A mode is accepted only if MajorLogin answers with token + account id + `aes_ak` / `iv_i` / `server_time` (needed for the game gateway) AND GetLoginData returns a gateway address. `LOGIN_MODE=web` (or `lean` / `full` / `legacy`) forces one style and never falls back.
+
+Why the old payload was a problem: it still carried the values of an older game build, e.g. `vercfg_sign` `1.3fb8adbf45f44ce9`; the version server now answers with a different `vercfg_sign` per version/region (e.g. `1.f03abb0051baf3c6`). The `web` mode always sends the current one.
 
 Log lines worth checking:
-- `[LOGIN] login mode 'lean' works ...`  -> new login OK
-- `[MAJORLOGIN/<style>] server rejected payload: HTTP ...` / `answer could not be read` -> why that style failed
+- `[WEBVER] OK app=... vercfg=...`  -> version server config for the web login
+- `[LOGIN] login mode 'web' works ...`  -> web login OK; `[LOGIN] web login servers: MajorLogin=... | GetLoginData=...`
+- `[MAJORLOGIN/<style>] server rejected payload: HTTP ... | url=...` / `answer could not be read` -> why that style failed
 - `[GETLOGIN] refused -> ...` -> real reason why GetLoginData (EXP refresh) failed
 - `[LOGIN] every login mode failed: ...` -> all styles failed, reasons are listed (incl. which protobuf field numbers the server sent)
 - `[FUNCTIONAL] Non-match big packet ... | packet=NB top_fields=[...]` -> what an unrecognised game packet contained
