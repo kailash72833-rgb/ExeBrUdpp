@@ -11,6 +11,8 @@ import time
 import os
 import uuid
 import itertools
+import math
+import collections
 import secrets
 import traceback
 import base64
@@ -65,6 +67,9 @@ NEW_MATCH_DELAY = 5.0
 MAX_MATCH_DURATION = 800
 MATCH_IDLE_TIMEOUT = 15.0
 MAX_CONCURRENT_MATCHES = 1
+# MAX_PARALLEL_MATCHES (Railway variable, optional): how many matches ONE account may play at the same time.
+# 0 (default) = no limit, exactly as before (the bot keeps starting new matches while old ones still run).
+MAX_PARALLEL_MATCHES = max(0, int(os.environ.get("MAX_PARALLEL_MATCHES", "0") or 0))
 
 EXP_REFRESH_INTERVAL = 12.0
 EXP_REFRESH_AFTER_MATCH_DELAY = 3.0
@@ -670,23 +675,29 @@ async def version_config():
 # ==================== NEW MAJOR LOGIN SETTINGS (2026-10) ====================
 LOGIN_CODE_VERSION = "2026-10-18-web"
 # LOGIN_MODE (Railway variable, optional):
-#   auto   (default)  web    = login of Web.zip (OB55 payload + vercfg_sign / cdn / client_ip from the version
-#                              server + new headers + GetLoginData with the jwt)             <- tried first
+#   super  (DEFAULT)  = ONLY the login of Superfast.zip, never falls back to the older logins (web / lean / full / legacy
+#                       send other device + channel values, e.g. channel 3rd_party).
+#   auto              super  = login of Superfast.zip (its version query, token, MajorLogin + GetLoginData bodies
+#                              and headers, exactly as in Superfast app.py)                  <- ALWAYS tried first
+#                     web    = login of Web.zip (OB55 payload + vercfg_sign / cdn / client_ip from the version
+#                              server + new headers + GetLoginData with the jwt)             <- fallback
 #                     lean   = small LoginReq payload + new headers
 #                     full   = old big payload + new headers
 #                     legacy = exactly the old way (old payload + old headers)
-#                     the first one that works completely is remembered and used first next time
-#   web | lean | full | legacy   = use only that one
-LOGIN_MODE = os.environ.get("LOGIN_MODE", "auto").strip().lower()
-if LOGIN_MODE not in ("auto", "web", "lean", "full", "legacy"):
-    LOGIN_MODE = "auto"
-LOGIN_MODE_ORDER = ("web", "lean", "full", "legacy")
+#                     after 'super' the one that worked last time is tried first
+#   super | web | lean | full | legacy   = use only that one
+LOGIN_MODE = os.environ.get("LOGIN_MODE", "super").strip().lower()
+if LOGIN_MODE not in ("auto", "super", "web", "lean", "full", "legacy"):
+    LOGIN_MODE = "super"
+LOGIN_MODE_ORDER = ("super", "web", "lean", "full", "legacy")
 PLAY_VER = (os.environ.get("PLAY_VER", "1.132.1") or "1.132.1").strip()      # sent as 'PlAy_VeR' header
 LOGIN_X_GA_SV = "1789534056"                                                  # new-style 'X-Ga-Sv'
 GUEST_TOKEN_URLS = (
-    "https://ffmconnect.live.gop.garenanow.com/oauth/guest/token/grant",      # new
-    "https://100067.connect.garena.com/oauth/guest/token/grant",              # old (fallback)
+    "https://100067.connect.garena.com/oauth/guest/token/grant",              # Superfast.zip (first)
+    "https://ffmconnect.live.gop.garenanow.com/oauth/guest/token/grant",      # fallback
 )
+GUEST_TOKEN_TRIES = 4                                                         # Superfast.zip: 4 tries, 0.7 s apart
+GUEST_TOKEN_UA = "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B)"             # Superfast.zip user agent
 TOKEN_INSPECT_URLS = (
     "https://100067.connect.garena.com/oauth/token/inspect",
     "https://ffmconnect.live.gop.garenanow.com/oauth/token/inspect",
@@ -716,6 +727,12 @@ WEB_MAJOR_TRIES = 2                                                             
 _login_base_pref: Dict[str, Optional[str]] = {"url": None}                        # MajorLogin server that worked last time
 _web_ver_lock = asyncio.Lock()
 _login_seen: set = set()
+
+# ---------------- settings of the 'super' login (taken from Superfast.zip / app.py) ----------------
+SUPER_REGION = (os.environ.get("SUPER_REGION", "BD") or "BD").strip().upper()      # 'region' of the version server + payload field 26 (Superfast uses BD)
+SUPER_LANG_CODE = "en"                                                             # payload field 21 (Superfast: "en")
+SUPER_MAJOR_TRIES = 2                                                              # MajorLogin tries per server when the network / server hiccups
+_super_ver_lock = asyncio.Lock()
 
 
 def _norm_base(u) -> str:
@@ -814,7 +831,7 @@ def _guest_headers(url: str) -> Dict[str, str]:
         }
     return {
         "Host": "100067.connect.garena.com",
-        "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; SM-G998B Build/SP1A.210812.016)",
+        "User-Agent": GUEST_TOKEN_UA,
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "close",
@@ -835,7 +852,7 @@ async def get_access_token(uid, password):
     if pref in urls:                                  # the address that worked last time goes first
         urls.remove(pref)
         urls.insert(0, pref)
-    for attempt in range(3):
+    for attempt in range(GUEST_TOKEN_TRIES):
         for url in urls:
             try:
                 response = await client.post(url, headers=_guest_headers(url), data=data)
@@ -851,7 +868,7 @@ async def get_access_token(uid, password):
                     await asyncio.sleep(1)
             except Exception:
                 pass
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.7)
     return None
 
 
@@ -1046,10 +1063,24 @@ def _web_client_bases(res_url, region) -> List[str]:
 
 def _login_headers(release_version, style: str, token: Optional[str] = None) -> Dict[str, str]:
     """style 'legacy' = headers exactly as before, 'new' = headers of the lean login,
-    'web' = headers of Web.zip (X-GA-SV = current time)."""
+    'web' = headers of Web.zip (X-GA-SV = current time),
+    'super' = headers of Superfast.zip (MajorLogin: 'Bearer' + the full UnityWebRequest user agent,
+              GetLoginData: plain 'UnityPlayer/2018.4.12f1' user agent)."""
     if style == "legacy":
         h = headers.copy()
         h["ReleaseVersion"] = str(release_version)
+    elif style == "super":
+        h = {
+            "Accept": "*/*",
+            "Authorization": "Bearer",             # Superfast sends 'Bearer ' (aiohttp); httpx refuses a trailing space ("Illegal header value")
+            "Content-Type": "application/x-www-form-urlencoded",
+            "ReleaseVersion": str(release_version),
+            "User-Agent": ("UnityPlayer/2018.4.12f1" if token
+                           else "UnityPlayer/2018.4.12f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)"),
+            "X-GA": "v1 1",
+            "X-GA-SV": str(int(time.time())),
+            "X-Unity-Version": "2018.4.12f1",
+        }
     elif style == "web":
         h = {
             "User-Agent": headers["User-Agent"],
@@ -1139,6 +1170,8 @@ class _LoginRes:
     aes_ak = b""
     iv_i = b""
     field_ids: List[int] = []
+    release_version = ""      # set by the 'super' login: the versions that login really used
+    client_version = ""
 
 
 def _jwt_region(token: str) -> str:
@@ -1180,6 +1213,12 @@ def _try_login_res(raw) -> Optional[_LoginRes]:
         res.server_time = i(21)
         res.aes_ak = b(22)
         res.iv_i = b(23)
+        if not (len(res.aes_ak) == 16 and len(res.iv_i) == 16):
+            for kf, vf in ((24, 25), (6, 7)):             # Superfast.zip's fallback: other key / iv field pairs
+                k, v = b(kf), b(vf)
+                if len(k) == 16 and len(v) == 16:
+                    res.aes_ak, res.iv_i = k, v
+                    break
         res.field_ids = sorted(f.keys())
         return res
     except Exception:
@@ -1271,8 +1310,8 @@ async def send_getlogin(data, base_url, token, release_version, style="legacy"):
     hosts: List[str] = []
     if style == "legacy":
         order = (LEGACY_GETLOGIN_HOST, url_host)
-    elif style == "web":
-        order = (url_host,)                          # Web.zip: no forced Host header
+    elif style in ("web", "super"):
+        order = (url_host,)                          # Web.zip / Superfast.zip: no forced Host header
     else:
         order = (url_host, LEGACY_GETLOGIN_HOST)
     for h in order:                                  # the old code always forced the legacy Host; the real host of the URL is the second try
@@ -1286,10 +1325,20 @@ async def send_getlogin(data, base_url, token, release_version, style="legacy"):
     for host in hosts:
         req_headers = _login_headers(release_version, style, token)
         req_headers["Host"] = host
-        try:
-            r = await client.post(url, headers=req_headers, data=data)
-        except Exception as e:                       # network problem: a second Host will not help
-            tries.append(f"Host={host}: {type(e).__name__}: {e}")
+        r = None
+        net_err = None
+        for _net_try in range(3):                    # network hiccup (ConnectTimeout ...): same request again, fresh headers
+            try:
+                if style in ("web", "super"):            # these styles send the current time as X-GA-SV
+                    req_headers["X-GA-SV"] = str(int(time.time()))
+                r = await client.post(url, headers=req_headers, data=data, timeout=httpx.Timeout(20.0, connect=12.0))
+                net_err = None
+                break
+            except Exception as e:
+                net_err = f"{type(e).__name__}: {e}"
+                await asyncio.sleep(1.0 + _net_try)
+        if net_err is not None or r is None:         # still a network problem: a second Host will not help
+            tries.append(f"Host={host}: {net_err} (3 tries)")
             break
         if r.status_code == 200:
             response = r
@@ -1400,6 +1449,171 @@ async def _login_web(open_id, access_token, platform, device_info, server_url):
     return (res, gl, gl_payload, "web"), ""
 
 
+# ==================== 'SUPER' LOGIN (taken from Superfast.zip / app.py) ====================
+def _super_ver_url(version: str) -> str:
+    """Same query as Superfast's version_config(): channel android / appstore googleplay, whitelist 1.3.0."""
+    return (f"{VER_URL}?version={version}&lang={REGION_LANG.get(SUPER_REGION, 'en')}&device=android&channel=android"
+            f"&appstore=googleplay&region={SUPER_REGION}&whitelist_version=1.3.0&whitelist_sp_version=1.0.0")
+
+
+async def _ask_super_ver(version: str):
+    """-> (cfg dict | None, note, network_error)"""
+    try:
+        response = await client.get(_super_ver_url(version))
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        return None, f"{version}: {type(e).__name__}", True
+    if not isinstance(data, dict):
+        return None, f"{version}: bad answer", False
+    if data.get("is_server_open") is False:
+        return None, f"{version}: game server closed (maintenance)", False
+    code = data.get("code")
+    if code not in (0, "0", None) or not (data.get("server_url") and data.get("remote_version")
+                                          and data.get("latest_release_version")):
+        return None, f"{version}: code={code}", False
+    return data, version, False
+
+
+async def _fetch_super_config():
+    """ver.php answer (server_url, remote_version, latest_release_version ...) for the 'super' login or None.
+    App versions are tried in the same order as for every other login: APP_VERSION env, Play Store, last good, fallbacks."""
+    notes: List[str] = []
+    for v in (await _candidate_versions())[:MAX_VERSION_CANDIDATES]:
+        cfg, note, net_err = await _ask_super_ver(v)
+        if cfg:
+            _version_state["app_version"] = v
+            _version_state["app_time"] = time.time()
+            line = (f"[SUPERVER] OK app={v} remote={cfg.get('remote_version')} release={cfg.get('latest_release_version')} "
+                    f"server={cfg.get('server_url')} region={SUPER_REGION}")
+            if line != _version_log.get("super"):
+                _version_log["super"] = line
+                print_success(line)
+            return cfg
+        notes.append(note)
+        if net_err:
+            break
+    _warn_limited("superver_fail", "[SUPERVER] version server gave no login server. Tried: " + " | ".join(notes or ["nothing"]))
+    return None
+
+
+async def super_version_config():
+    """Cached (VERSION_CACHE_TTL) config for the 'super' login. A stale answer is better than none."""
+    now = time.time()
+    cfg = _version_state.get("super")
+    if cfg and now - _version_state.get("super_time", 0.0) < VERSION_CACHE_TTL:
+        return cfg
+    async with _super_ver_lock:
+        cfg = _version_state.get("super")
+        if cfg and time.time() - _version_state.get("super_time", 0.0) < VERSION_CACHE_TTL:
+            return cfg
+        fresh = await _fetch_super_config()
+        if fresh:
+            _version_state["super"] = fresh
+            _version_state["super_time"] = time.time()
+            return fresh
+        return cfg
+
+
+def build_super_payload(open_id, access_token, platform, version, lang_code=SUPER_LANG_CODE):
+    """Login bodies of Superfast.zip (get_payload) -> (MajorLogin body, GetLoginData body), both AES-CBC encrypted.
+    Every value is copied from Superfast's app.py. Both bodies share one fresh device id; the GetLoginData body has the
+    extra fields 90 / 91 / 103 and field 99 = "0"."""
+    try:
+        plat = int(platform)
+    except Exception:
+        plat = 4
+    device_id = f"Google|{uuid.uuid4()}"
+    fields = {
+        3: datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 4: "free fire", 5: 1,
+        7: f"{version}",
+        8: "Android OS 14 / API-34 (UP1A.231005.007/E135FXXSEEZE2)",
+        9: "Handheld", 11: "CarrierDataNetwork",
+        12: 1672, 13: 750, 14: "338",
+        15: "ARMv7 VFPv3 NEON | 2002 | 8",
+        16: 3702, 17: "Mali-G52",
+        18: "OpenGL ES 3.2 v1.r38p1-01bet0-mbs2v41_0.6d20ec041e51b2f2d25dfc265586ebe8",
+        19: device_id, 20: "104.28.197.151", 21: lang_code,
+        22: f"{open_id}", 23: f"{plat}", 24: "Handheld",
+        25: "samsung SM-E135F", 26: SUPER_REGION,
+        29: f"{access_token}", 30: 1, 42: "Cellular",
+        57: "7428b253defc164018c604a1ebbfebdf",
+        60: 52037, 61: 5355, 62: 3723, 63: 3,
+        64: 5483, 65: 52037, 66: 5483, 67: 52037,
+        73: 2,
+        74: "/data/app/~~yACsV8QOk9OexgajWQP30A==/com.dts.freefireth-Bi_wPVrrhYM2nYncc29q7Q==/lib/arm",
+        76: 1,
+        77: "b8e0cd5e295eee42f5860d3c86e483dd|/data/app/~~yACsV8QOk9OexgajWQP30A==/com.dts.freefireth-Bi_wPVrrhYM2nYncc29q7Q==/base.apk",
+        78: 3, 79: 1, 81: "32", 83: "2019121229",
+        86: "OpenGLES2", 87: 8191, 88: plat,
+        92: 16091, 93: "android",
+        94: "KqsHT3Yeqo3RLRl8efNiL3aL/1SHwlSrtK0DwNAqdkNBQz70TeVy+icaIwuR3UK4b65Uf3IG5xBFEv0uu+jQZI+rOYCmNCsXjJT4QcZaYgoaaUGG",
+        95: 111107,
+        96: "{\"cur_rate\":null,\"support_etc2\":false}",
+        97: 1, 98: 1,
+        99: f"{plat}", 100: f"{plat}",
+        102: "4503454457550c0766",
+        104: 53792, 105: 1,
+        106: "https://dl-bs.ggpolarbear.com/live/ABHotUpdates/|https://core-bs.ggpolarbear.com/live/ABHotUpdates/|6b2078db9d22dd98f8e9386a39af8462",
+        107: "c8e41b7a93f02d56e1a94c7b8203f5d1",
+    }
+    getlogin = dict(fields)
+    getlogin[90] = "Khulna"
+    getlogin[91] = "D"
+    getlogin[99] = "0"
+    getlogin[103] = 1
+    return encrypt_api_bytes(build_proto(fields)), encrypt_api_bytes(build_proto(getlogin))
+
+
+async def _login_super(open_id, access_token, platform):
+    """The login of Superfast.zip: -> ((res, getlogin_result, getlogin_payload, 'super') | None, why)"""
+    cfg = await super_version_config()
+    if not cfg:
+        return None, "super: no config from the version server (see [SUPERVER] line)"
+    release = str(cfg.get("latest_release_version"))
+    remote = str(cfg.get("remote_version"))
+    major_payload, gl_payload = build_super_payload(open_id, access_token, platform, remote)
+    bases: List[str] = []
+    for u in (LOGIN_SERVER_URL_ENV, cfg.get("server_url"), *WEB_LOGIN_FALLBACK_URLS):
+        u = _norm_base(u)
+        if u and u.rstrip("/") not in [x.rstrip("/") for x in bases]:
+            bases.append(u)
+    res = None
+    used_base = ""
+    for base in bases:
+        for attempt in range(SUPER_MAJOR_TRIES):
+            info: Dict[str, Any] = {}
+            res = await send_majorlogin(major_payload, release, base, "super", info)
+            if res is not None or info.get("kind") not in ("net", "http5xx"):
+                break                                # only a network hiccup / busy server is worth the same address again
+            await asyncio.sleep(1.5 * (attempt + 1))
+        if res is not None:
+            used_base = base
+            break
+    if res is None:
+        return None, f"super: MajorLogin refused (tried {', '.join(bases) or 'no server'})"
+    if not (res.aes_ak and res.iv_i and res.server_time):
+        return None, f"super: answer has no aes_ak/iv_i/server_time (fields in answer: {res.field_ids})"
+    gl = None
+    gl_base = ""
+    for base in _web_client_bases(res.url, res.region):
+        gl = await send_getlogin(gl_payload, base, res.token, release, "super")
+        if gl is not None:
+            gl_base = base
+            break
+    if gl is None:
+        return None, "super: GetLoginData refused"
+    if gl_base and gl_base.rstrip("/") != str(res.url or "").rstrip("/"):
+        res.url = gl_base                            # EXP refresh asks GetLoginData at res.url -> use the address that worked
+    res.release_version = release                    # the rest of the bot (EXP refresh, match search) uses the versions this login used
+    res.client_version = remote
+    seen = ("super", used_base, gl_base)
+    if seen not in _login_seen:
+        _login_seen.add(seen)
+        print_info(f"[LOGIN] super login servers: MajorLogin={used_base} | GetLoginData={gl_base}")
+    return (res, gl, gl_payload, "super"), ""
+
+
 _login_mode_state: Dict[str, Optional[str]] = {"mode": None}
 
 
@@ -1408,16 +1622,18 @@ async def login_sequence(open_id, access_token, platform, client_version, device
     """MajorLogin + GetLoginData as one unit, over the login modes (see LOGIN_MODE).
     -> (majorlogin_response, getlogin_result, payload, style)  or None"""
     if LOGIN_MODE == "auto":
-        order = list(LOGIN_MODE_ORDER)
+        order = list(LOGIN_MODE_ORDER)               # 'super' stays first; among the fallbacks what worked last goes first
         last = _login_mode_state["mode"]
-        if last in order:                            # what worked last time goes first
+        if last in order and last != "super":
             order.remove(last)
-            order.insert(0, last)
+            order.insert(1, last)
     else:
         order = [LOGIN_MODE]
     why: List[str] = []
     for mode in order:
-        if mode == "web":
+        if mode == "super":
+            out, reason = await _login_super(open_id, access_token, platform)
+        elif mode == "web":
             out, reason = await _login_web(open_id, access_token, platform, device_info, server_url)
         else:
             out, reason = await _login_classic(mode, open_id, access_token, platform, client_version,
@@ -1449,28 +1665,65 @@ def _packet_info(res, n) -> str:
         return f"packet info unavailable ({type(e).__name__})"
 
 
+# GATEWAY_STYLE (Railway variable, optional) = the first bytes of the TCP gateway packets (login packet, chat packet,
+# keep-alive, StartMatch region byte).
+#   super (DEFAULT) = the values of Superfast.zip (home region BD)
+#   exe             = what this bot used before the Superfast update (home region ID)
+# If accounts log in but never reach the gateway, set GATEWAY_STYLE=exe.
+GATEWAY_STYLE = (os.environ.get("GATEWAY_STYLE", "super") or "super").strip().lower()
+if GATEWAY_STYLE not in ("exe", "super"):
+    GATEWAY_STYLE = "super"
+
+
+def _gateway_codes(region):
+    """-> (OnLine prefix, ChaT prefix, keep-alive) for the account's region."""
+    home = "BD" if GATEWAY_STYLE == "super" else "ID"
+    reg = str(region).upper() if region else home
+    n = '19' if reg == home else ('14' if reg == 'IND' else '15')
+    if GATEWAY_STYLE == "super":
+        return f"72{n}", f"81{n}", f"02{n}"
+    return f"71{n}", f"92{n}", f"02{n}"
+
+
 async def build_tcp_startup_packet(account_id, token, server_time, key, iv, region="ID", typ='OnLine'):
     uid_hex = f"{int(account_id):016x}"
     timestamp_hex = f"{int(server_time):08x}"
     encode_token = token.encode()
     encrypted_packet = (await aes_encrypt(encode_token, key, iv)).hex()
     encrypted_packet_length = f"{len(encrypted_packet) // 2:08x}"
-    reg = str(region).upper() if region else "ID"
+    online_prefix, chat_prefix, _ka = _gateway_codes(region)
     if typ == 'OnLine':
-        prefix = '7119' if reg == 'ID' else ('7114' if reg == 'IND' else '7115')
-        return f"{prefix}{uid_hex}{timestamp_hex}00000000{encrypted_packet_length}{encrypted_packet}"
+        return f"{online_prefix}{uid_hex}{timestamp_hex}00000000{encrypted_packet_length}{encrypted_packet}"
     else:
-        prefix = '9219' if reg == 'ID' else ('9214' if reg == 'IND' else '9215')
-        return f"{prefix}{uid_hex}{timestamp_hex}{encrypted_packet_length}{encrypted_packet}"
+        return f"{chat_prefix}{uid_hex}{timestamp_hex}{encrypted_packet_length}{encrypted_packet}"
 
 
 async def send_keep_alive(region="ID"):
     try:
-        reg = str(region).upper() if region else "ID"
-        ka_hex = "0219" if reg == "ID" else ("0214" if reg == "IND" else "0215")
-        return bytes.fromhex(ka_hex)
+        return bytes.fromhex(_gateway_codes(region)[2])
     except Exception:
         return bytes.fromhex("0219")
+
+
+# START_REGION (Railway variable, optional): region sent in the match search.  account (default) = the account's own region
+# (Superfast), or a fixed code, e.g. START_REGION=ID = what this bot sent before the Superfast update.
+START_REGION = (os.environ.get("START_REGION", "account") or "account").strip()
+# READY_PACKET=0 turns the 'ready' packet before the match search off (Superfast sends it).
+READY_PACKET = os.environ.get("READY_PACKET", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def build_ready_packet(account_id, key, iv) -> bytes:
+    """Superfast's ready_for_game: the 'ready' packet (cmd 0519) a real client sends BEFORE it searches for a match."""
+    enc = encrypt_api_bytes_with(key, iv, build_proto({1: 15, 2: {1: int(account_id), 2: 1}})).hex()
+    length_hex = hex(len(enc) // 2)[2:]
+    if len(length_hex) % 2:
+        length_hex = "0" + length_hex
+    pad_zeros = max(0, 12 - len("0519") - len(length_hex))
+    return bytes.fromhex("0519" + "0" * pad_zeros + length_hex + enc)
+
+
+def encrypt_api_bytes_with(key, iv, plain_bytes) -> bytes:
+    return AES.new(key, AES.MODE_CBC, iv).encrypt(pad(plain_bytes, AES.block_size))
 
 # ============================================================
 # LONE WOLF / BR MATCH SEARCH
@@ -1514,7 +1767,7 @@ async def start_game_battle_royale(region, client_version, writer, key, iv):
     hex_length = hex(packet_length)[2:]
     hex_length = hex_length if len(hex_length) > 1 else "0" + hex_length
     reg = str(region).upper() if region else "BD"
-    reg_prefix = "031900" if reg == "ID" else ("031400" if reg == "IND" else "031500")
+    reg_prefix = "03" + _gateway_codes(region)[2][2:] + "00"      # region byte follows GATEWAY_STYLE
     final_packet = reg_prefix + "0" * (6 - len(hex_length)) + hex_length + encrypted_packet
     writer.write(bytes.fromhex(final_packet))
     await writer.drain()
@@ -1877,6 +2130,1065 @@ async def decode_packet(packet, key, mask=None):
     return candidates[0]
 
 
+# ===== MOVEMENT ENGINE BEGIN =====
+# ============================================================
+# MOVEMENT ENGINE  (ported from the Clash-Squad bot: app.py + app_part2.py)
+# The bot really WALKS in the match now: it reads where the server says it stands (cmd 2001), plans a step
+# every 1/MOVE_HZ seconds and sends the position back (old position update + new cmd-2001 packet).
+#   MOVEMENT=0            turn the whole engine off (back to the old anti-AFK nudges)
+#   MOVE_HZ=10            position updates per second (lower = less CPU when many matches run in parallel)
+#   MOVE_PKT_MODE         both (default) | new | old
+#   MOVE_PKT_PHASE        arena (default) | game | auto
+#   ZONE_MODE_LW=avoid    Lone Wolf / round modes (like Clash Squad): avoid = never walk into the zone circle
+#   ZONE_MODE_BR=safe     Battle Royale: safe = stand around the landing spot, walk in only when the zone closes on us
+#                         (avoid = walk OUT of the circle; follow = walk to the zone centre)   ZONE_MODE=x sets both
+#   BR_WAIT_GROUND=1      Battle Royale: send no steps while the server moves us fast (plane / free-fall)
+#   BOT_EXTRAS=1 / BOT_JUMP / BOT_LOOK / BOT_STRAFE   jump, camera sweep, joystick wobble (OFF by default)
+# ============================================================
+def _mv_flag(name, default="1"):
+    return str(os.environ.get(name, default) or default).strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _mv_num(name, d, lo, hi):
+    try:
+        return max(lo, min(hi, float(os.environ.get(name, str(d)) or d)))
+    except Exception:
+        return float(d)
+
+
+MOVEMENT_ENGINE = _mv_flag("MOVEMENT", "1")
+SEND_HZ = _mv_num("MOVE_HZ", 10.0, 2.0, 20.0)
+MOVE_INTERVAL = 1.0 / SEND_HZ
+WALK_SPEED = 5150.0
+STEP_PER_TICK = WALK_SPEED / SEND_HZ
+ZONE_RADIUS_SCALE = 1000.0
+
+MOVE_PKT_MODE = (os.environ.get("MOVE_PKT_MODE", "both") or "both").strip().lower()
+if MOVE_PKT_MODE not in ("both", "new", "old"):
+    MOVE_PKT_MODE = "both"
+MOVE_PKT_PHASE = (os.environ.get("MOVE_PKT_PHASE", "arena") or "arena").strip().lower()
+if MOVE_PKT_PHASE not in ("arena", "game", "auto"):
+    MOVE_PKT_PHASE = "arena"
+
+BOT_EXTRAS = _mv_flag("BOT_EXTRAS", "0")
+_XDEF = "1" if BOT_EXTRAS else "0"
+BOT_JUMP = _mv_flag("BOT_JUMP", _XDEF)
+BOT_LOOK = _mv_flag("BOT_LOOK", _XDEF)
+BOT_STRAFE = _mv_flag("BOT_STRAFE", _XDEF)
+BOT_SIGNALS = _mv_flag("BOT_SIGNALS", "1")
+BOT_UNSTUCK = _mv_flag("BOT_UNSTUCK", "1")
+BOT_CMDSTATS = _mv_flag("BOT_CMDSTATS", "1")
+BOT_STRAFE_DEG = _mv_num("BOT_STRAFE_DEG", 12.0, 0.0, 30.0)
+BOT_LOOK_SPEED = _mv_num("BOT_LOOK_SPEED", 2.5, 0.5, 8.0)
+BOT_LOOK_PITCH = _mv_num("BOT_LOOK_PITCH", 20.0, 0.0, 40.0)
+BOT_JUMP_HEIGHT = _mv_num("BOT_JUMP_HEIGHT", 1000.0, 300.0, 2500.0)
+BOT_IDLE_RADIUS = _mv_num("BOT_IDLE_RADIUS", 8000.0, 1000.0, 40000.0)
+ZONE_AVOID_MARGIN = _mv_num("ZONE_AVOID_MARGIN", 1.0, 0.8, 2.0)
+ZONE_BUFFER = _mv_num("ZONE_BUFFER", 3000.0, 0.0, 30000.0)
+BOT_JUMP_BYTE = _mv_flag("BOT_JUMP_BYTE", "1")
+JUMP_TICKS = 8
+JUMP_V0 = 450
+ALIVE_RECOVER_SEC = _mv_num("ALIVE_RECOVER_SEC", 20.0, 3.0, 300.0)
+BR_WAIT_GROUND = _mv_flag("BR_WAIT_GROUND", "1")
+# Battle Royale never sends cmd 101 (player join), so our in-match id is read from the cmd-100 reply ("join match") and
+# confirmed with the first field of our own state packet (cmd 2001).  BR_ID_GUESS=1 = use the cmd-100 value even if it
+# could not be confirmed (try it on a throw-away account first).
+BR_ID_GUESS = _mv_flag("BR_ID_GUESS", "0")
+FLIGHT_SPEED_MM_S = 12000.0          # the server moves us faster than this (12 m/s) = plane / free-fall, not walking
+
+
+def _mv_zone_mode(env_name, default):
+    v = (os.environ.get(env_name, "") or os.environ.get("ZONE_MODE", "") or default).strip().lower()
+    return v if v in ("avoid", "follow", "safe") else default
+
+
+ZONE_MODE_LW = _mv_zone_mode("ZONE_MODE_LW", "avoid")
+ZONE_MODE_BR = _mv_zone_mode("ZONE_MODE_BR", "safe")
+
+CMD_PLAYER_JOIN = 101
+CMD_MATCH_END = 103
+CMD_DEAD = 107
+CMD_SAFE_ZONE = 117
+CMD_SERVER_TIME = 2000
+CMD_MY_STATE = 2001
+CMD_OTHER_STATES = 2012
+CMD_QUICK_CHAT = 551
+CMD_GRI_SYNC = 1901
+PHASE_PREPARE = 1
+PHASE_FIGHT = 3
+PHASE_ROUND_END = 5
+POSE_STANDING = 0
+POSE_DASHING = 2
+QUICK_CHAT_FOLLOW = 1
+QUICK_CHAT_HELP = 2
+
+
+# ---------- small encoders / decoders ----------
+def _put_varint(out, v):
+    v = int(v)
+    if v < 0:
+        v &= 0xFFFFFFFFFFFFFFFF
+    while v >= 0x80:
+        out.append((v & 0x7F) | 0x80)
+        v >>= 7
+    out.append(v & 0x7F)
+
+
+def _put_zigvarint(out, v):
+    z = (int(v) << 1) ^ (int(v) >> 63)
+    _put_varint(out, z & 0xFFFFFFFFFFFFFFFF)
+
+
+def _put_float_bits(out, f):
+    bits = struct.unpack("<I", struct.pack("<f", float(f)))[0]
+    _put_varint(out, bits)
+
+
+def _rd_varint(b, p):
+    v = i = 0
+    while True:
+        c = b[p + i]
+        v |= (c & 0x7F) << (7 * i)
+        i += 1
+        if not c & 0x80:
+            return v, p + i
+
+
+def _zag(v):
+    return (v >> 1) ^ -(v & 1)
+
+
+_MOVE_SEQ_KEY = 35371
+
+
+async def build_movement_packet_2001(key_bytes, msg_key, player_state, x, y, z,
+                                     tick, counter, move_state, account_uid,
+                                     room_code, phase="arena"):
+    """The 'new' position packet: raw body + its own header + CRC7 (identical to the Clash-Squad bot)."""
+    if phase == "game":
+        TAIL = (b"\x00" * 7 + b"\x93\xca\xd5\xf9\x0b" + b"\x8e\xfe\xfc\xf7\x0b"
+                + b"\xf4\xe0\xfe\xf7\x03" + b"\x00\x00")
+    else:
+        TAIL = (b"\x00" * 7 + b"\xbd\xb6\xe1\xf3\x03" + b"\x00"
+                + b"\xc4\xb6\xe1\xfb\x0b" + b"\x00\x00")
+    body = bytearray()
+    _put_varint(body, account_uid)
+    _put_varint(body, player_state)
+    _put_zigvarint(body, x)
+    _put_zigvarint(body, y)
+    _put_zigvarint(body, z)
+    body += b"\x00"
+    _put_varint(body, move_state)
+    body += TAIL
+    _put_varint(body, tick)
+    body += ((_MOVE_SEQ_KEY ^ counter) & 0xFFFF).to_bytes(2, "little")
+    body += b"\x00\x00\x00"
+    _put_varint(body, counter)
+    body = bytes(body)
+    k = key_bytes[0]
+    v80 = ((k << 8) | k) & 0xFFFF
+    h = bytearray()
+    h.append(msg_key & 0xFF)
+    h.append(0x00)
+    h.append(0x00 ^ k)
+    h += ((2001 ^ v80) & 0xFFFF).to_bytes(2, "little")
+    h += ((len(body) ^ v80) & 0xFFFF).to_bytes(2, "little")
+    h.append(0x00 ^ k)
+    h[1] = (await crc7_buff(0, bytes(h[2:]) + body)) & 0x7F
+    return bytes(h) + body
+
+
+def build_player_state_upload(pid, pos, rot, tdir, vel, aim, st,
+                              ps=0, pp=0, plat=0, lg=0, ping=0,
+                              jump=0, slide=0, custom=0):
+    o = bytearray()
+    _put_varint(o, int(pid))
+    _put_zigvarint(o, pos[0]); _put_zigvarint(o, pos[1]); _put_zigvarint(o, pos[2])
+    _put_zigvarint(o, rot[0]); _put_zigvarint(o, rot[1]); _put_zigvarint(o, rot[2])
+    _put_zigvarint(o, tdir[0]); _put_zigvarint(o, tdir[1])
+    _put_zigvarint(o, vel[0]); _put_zigvarint(o, vel[1]); _put_zigvarint(o, vel[2])
+    o.append(ps & 0xFF); o.append(pp & 0xFF)
+    _put_float_bits(o, aim[0]); _put_float_bits(o, aim[1]); _put_float_bits(o, aim[2])
+    _put_varint(o, plat); o.append(1 if lg else 0)
+    _put_varint(o, ping); o.append(jump & 0xFF)
+    _put_varint(o, slide); o.append(custom & 0xFF)
+    _put_varint(o, st & 0xFFFFFFFF)
+    return bytes(o)
+
+
+def parse_player_join(body):
+    if body is None or len(body) < 4:
+        return None
+    try:
+        p = 0
+        uid, p = _rd_varint(body, p); _s, p = _rd_varint(body, p)
+        pid, p = _rd_varint(body, p); rl, p = _rd_varint(body, p)
+        n = _zag(rl)
+        name = body[p:p + n].decode("utf-8", "replace")
+    except (IndexError, ValueError):
+        return None
+    return uid, pid, name
+
+
+def parse_join_reply(body, uid):
+    """cmd 100 (join match reply): 0, match id, OUR uid, 0, 0, 0, 0, slot?, ext?, server time, 1, 0, 600, ... -> dict or None."""
+    if body is None or len(body) < 20:
+        return None
+    try:
+        p = 1; vals = []
+        for _ in range(10):
+            v, p = _rd_varint(body, p)
+            vals.append(v)
+    except (IndexError, ValueError):
+        return None
+    if len(vals) < 9 or vals[1] != int(uid):
+        return None
+    return {"slot": vals[6], "ext": vals[7], "tick": vals[8]}
+
+
+def peek_first_varints(body, n=2):
+    out = []
+    try:
+        p = 0
+        for _ in range(n):
+            v, p = _rd_varint(body, p)
+            out.append(v)
+    except (IndexError, ValueError):
+        pass
+    return out
+
+
+def decode_my_state(body):
+    if body is None or len(body) < 6:
+        return None
+    try:
+        p = 0
+        _mt, p = _rd_varint(body, p); _c, p = _rd_varint(body, p); p += 1
+        x, p = _rd_varint(body, p); y, p = _rd_varint(body, p); z, p = _rd_varint(body, p)
+    except (IndexError, ValueError):
+        return None
+    return (_zag(x), _zag(y), _zag(z))
+
+
+def decode_players_v2(body, max_sid=255):
+    players = {}
+    if body is None or len(body) < 4:
+        return players
+    p = 2
+    while p < len(body) - 1:
+        try:
+            sid = body[p]; p += 1
+            x, p = _rd_varint(body, p); y, p = _rd_varint(body, p); z, p = _rd_varint(body, p)
+            vx, p = _rd_varint(body, p); vy, p = _rd_varint(body, p); vz, p = _rd_varint(body, p)
+            yr = body[p]; p += 1
+            ay = body[p]; p += 1
+            axz = body[p]; p += 1
+            ps = body[p]; p += 1
+            pp = body[p]; p += 1
+            _pl, p = _rd_varint(body, p)
+            _c = body[p]; p += 1
+        except (IndexError, ValueError):
+            break
+        pos = (_zag(x), _zag(y), _zag(z))
+        if not (1 <= sid <= max_sid):
+            break
+        if any(abs(v) > 4000000 for v in pos):
+            break
+        players[sid] = {"pos": pos, "vel": (_zag(vx), _zag(vy), _zag(vz)),
+                        "yrot": yr, "aim_y": ay, "aim_xz": axz,
+                        "physx_state": ps, "physx_pose": pp}
+    return players
+
+
+def decode_server_time(body):
+    if not body:
+        return None
+    try:
+        tick, p = _rd_varint(body, 0)
+        phase = body[p] if p < len(body) else 0
+    except (IndexError, ValueError):
+        return None
+    return tick, phase
+
+
+def _read_vec2pos(b, p):
+    x, p = _rd_varint(b, p); z, p = _rd_varint(b, p)
+    return (_zag(x), _zag(z)), p
+
+
+def decode_safezone(body):
+    if not body:
+        return None
+    try:
+        p = 0
+        stage = body[p]; p += 1
+        oc, p = _read_vec2pos(body, p); orad, p = _rd_varint(body, p)
+        ic, p = _read_vec2pos(body, p); irad, p = _rd_varint(body, p)
+        _t, p = (body[p] if p < len(body) else 0), p + 1
+        st, p = _rd_varint(body, p); et, p = _rd_varint(body, p)
+    except (IndexError, ValueError):
+        return None
+    return {"stage": stage, "outer_center": oc, "outer_radius": orad,
+            "inner_center": ic, "inner_radius": irad, "start": st, "end": et}
+
+
+def parse_gri_block(body):
+    if body is None or len(body) < 2:
+        return {}
+    try:
+        bl = struct.unpack_from("<H", body, 0)[0]
+    except struct.error:
+        return {}
+    p = 2; end = min(2 + bl, len(body)); fields = {}
+    while p < end:
+        fid = body[p]; p += 1
+        if p >= end:
+            break
+        try:
+            v, p = _rd_varint(body, p)
+        except (IndexError, ValueError):
+            break
+        fields[fid] = v
+    return fields
+
+
+def get_match_phase(body):
+    fields = parse_gri_block(body)
+    if 3 not in fields:
+        return None
+    v = fields[3]
+    if v < 0x10000:
+        return None
+    return (v >> 16) & 0xFFFF, fields.get(2), (v >> 32) & 0xFFFFFFFF, v & 0xFFFF
+
+
+def decode_quick_chat(body):
+    if body is None or len(body) < 3:
+        return None
+    try:
+        p = 0
+        cid, p = _rd_varint(body, p)
+        _i, p = _rd_varint(body, p)
+        s, p = _rd_varint(body, p)
+    except (IndexError, ValueError):
+        return None
+    return cid, s & 0xFF, s
+
+
+# ---------- what the bot knows about the match ----------
+class MovementState:
+    def __init__(self, aid):
+        self.account_id = int(aid)
+        self.my_id = None; self.my_short = None; self.my_pos = None; self.server_pos = None
+        self.target_short = None; self.target_pos = None; self.target_seen = None
+        self.target_vel = (0.0, 0.0); self.target_pose = 0; self.target_state = 0
+        self.target_yrot = 0; self.target_aim_y = 0; self.target_aim_xz = 0
+        self.zone_center = None; self.zone_radius = 0.0
+        self.phase = None; self.round_no = None
+        self.server_tick = None; self.tick_local = None; self.tick_rate = 30.0
+        self.alive = True; self.downed = {}; self.roster = {}
+        self.joined_at = None; self.blocked = 0
+        self.yaw = 0.0; self.orbit_angle = 0.0
+        self.dead_since = None; self.need_resync = False
+        self.round_started = None; self.round_gen = 0; self.seen_phases = set()
+        self.sig = collections.Counter(); self.sig_last = {}; self.sig_moves = collections.Counter()
+        self.srv_hist = collections.deque(maxlen=60)      # (time, server position) - "walking but not moving" check
+        self.stuck_pending = False; self.stuck_times = collections.deque(maxlen=20)
+        self.cmd_stats = collections.Counter()
+        self.samples = collections.Counter()
+        self.hint = None                                   # cmd-100 reply: {'slot','ext','tick'}
+        self.id_source = None
+        self.home = None                                   # where we spawned (centre of the idle wandering)
+        self.sent = 0                                      # position updates sent in this match
+        self.pos_seen = 0                                  # how often the server told us our position
+        self.first_pos_at = None
+
+    def record_signals(self, players):
+        for sid, info in players.items():
+            if sid == self.my_short:
+                continue
+            vy = info.get("vel", (0, 0, 0))[1]
+            key = (info.get("physx_state", 0), info.get("physx_pose", 0), 1 if abs(vy) > 50 else 0)
+            self.sig[key] += 1
+            prev = self.sig_last.get(sid)
+            if prev is not None and prev != key:
+                self.sig_moves[(prev, key)] += 1
+            self.sig_last[sid] = key
+
+    def new_round(self, now):
+        self.alive = True; self.dead_since = None
+        self.downed.clear()
+        self.target_pos = None; self.target_seen = None; self.target_vel = (0.0, 0.0)
+        self.blocked = 0; self.need_resync = True
+        self.round_started = now; self.round_gen += 1
+
+    def teammates(self):
+        if self.my_id is None:
+            return set()
+        team = (self.my_id >> 24) & 0xFF
+        return {s for s, (fid, _) in self.roster.items()
+                if (fid >> 24) & 0xFF == team and s != self.my_short}
+
+    def set_identity(self, fid):
+        self.my_id = int(fid); self.my_short = self.my_id & 0xFF
+        if self.joined_at is None:
+            self.joined_at = time.time()
+
+    def add_player(self, fid, name):
+        self.roster[int(fid) & 0xFF] = (int(fid), name)
+
+    def seed_my_pos(self, pos):
+        self.server_pos = pos
+        self.pos_seen += 1
+        if self.first_pos_at is None:
+            self.first_pos_at = time.time()
+        self.srv_hist.append((time.time(), pos))
+        if self.need_resync:      # new round / landed: server put us somewhere new -> snap to it immediately
+            self.my_pos = pos; self.blocked = 0; self.need_resync = False; self.home = pos
+            return
+        if self.my_pos is None:
+            self.my_pos = pos; self.blocked = 0; self.home = pos
+            return
+        dx = pos[0] - self.my_pos[0]; dz = pos[2] - self.my_pos[2]
+        gap = math.sqrt(dx * dx + dz * dz)
+        if gap > 120000.0:
+            self.my_pos = pos; self.blocked = 0
+        elif gap > 1500.0:
+            self.blocked += 1
+            if self.blocked >= 5:
+                self.my_pos = pos; self.blocked = 0
+                self.stuck_pending = True        # the server keeps pulling us back -> something is in the way
+        else:
+            self.blocked = 0
+
+    def needs_history(self, now):
+        """Right after the first server position we cannot tell plane from ground yet: look for up to 3s first."""
+        if self.first_pos_at is None or now - self.first_pos_at >= 3.0:
+            return False
+        h = [t for t, _p in self.srv_hist if now - t <= 2.0]
+        return len(h) < 2 or h[-1] - h[0] < 0.6
+
+    def in_flight(self, now):
+        """True while the server itself moves us fast (plane / free-fall / parachute): no walking steps then."""
+        h = [(t, p) for t, p in self.srv_hist if now - t <= 2.0]
+        if len(h) < 2 or h[-1][0] - h[0][0] < 0.5:
+            return False
+        (t0, p0), (t1, p1) = h[0], h[-1]
+        d = math.sqrt(sum((a - b) ** 2 for a, b in zip(p0, p1)))
+        return d / (t1 - t0) > FLIGHT_SPEED_MM_S
+
+    def update_target(self, info, now):
+        prev_pos, prev_seen = self.target_pos, self.target_seen
+        self.target_pos = info["pos"]; self.target_seen = now
+        if prev_pos is not None and prev_seen is not None:
+            dt = now - prev_seen
+            if 0.01 < dt < 2.0:
+                vx = (info["pos"][0] - prev_pos[0]) / dt
+                vz = (info["pos"][2] - prev_pos[2]) / dt
+                if abs(vx) < 30000 and abs(vz) < 30000:
+                    self.target_vel = (vx, vz)
+        self.target_yrot = info.get("yrot", self.target_yrot)
+        self.target_pose = info.get("physx_pose", self.target_pose)
+
+    def sync_clock(self, tick, now):
+        if self.server_tick is not None and self.tick_local is not None:
+            dt = now - self.tick_local; dtick = tick - self.server_tick
+            if dt > 0.5 and 0 < dtick < 10000:
+                self.tick_rate = self.tick_rate * 0.7 + (dtick / dt) * 0.3
+        self.server_tick = tick; self.tick_local = now
+
+    def server_time(self, now):
+        if self.server_tick is None:
+            if self.joined_at is None:
+                return 0
+            return int((now - self.joined_at) * 1000.0) & 0xFFFFFFFF
+        elapsed = now - self.tick_local
+        ticks = self.server_tick + elapsed * self.tick_rate
+        return int(ticks * 1000.0 / self.tick_rate) & 0xFFFFFFFF
+
+
+# ---------- where to walk ----------
+class MovementPlanner:
+    def __init__(self, zone_mode="avoid", freeze_on_round_end=True):
+        self.zone_mode = zone_mode
+        self.freeze_on_round_end = freeze_on_round_end
+        self.step = float(STEP_PER_TICK)
+        self.max_step = float(STEP_PER_TICK * 1.25)
+        self.orbit_fraction = 0.55; self.orbit_speed = 6.0
+        self.coast_limit = 3.0; self._last_yaw = 0.0
+        t = time.time()
+        self._ph1 = random.uniform(0, 6.28); self._ph2 = random.uniform(0, 6.28); self._ph3 = random.uniform(0, 6.28)
+        self._spin = random.uniform(0, 360.0); self._spin_dir = random.choice((-1.0, 1.0))
+        self._next_jump = t + random.uniform(2.5, 6.0); self._jk = -1; self._jump_cool = 0.0
+        self.jumps = 0
+        self._moving_since = 0.0; self._esc = None; self._esc_block_until = 0.0; self._esc_side = 1
+        self.events = []                      # short texts for the log ("stuck -> left")
+        self._zone_side = random.choice((-1, 1))
+        self._idle_pt = None; self._idle_until = 0.0; self._idle_timeout = 0.0
+
+    def next_yaw(self):
+        return self._last_yaw
+
+    def look_yaw(self, now, move_yaw, moving):
+        """Camera direction in degrees (BOT_LOOK only)."""
+        if not BOT_LOOK:
+            return None
+        k = BOT_LOOK_SPEED / 2.5
+        if moving:
+            sweep = 55.0 * math.sin(now * 2.0 * k + self._ph1) + 18.0 * math.sin(now * 4.4 * k + self._ph2)
+            return (move_yaw + sweep) % 360.0
+        if random.random() < 0.015:
+            self._spin_dir = -self._spin_dir
+        self._spin = (self._spin + self._spin_dir * 6.0 * k) % 360.0
+        return self._spin
+
+    def pitch(self, now):
+        if not BOT_LOOK or BOT_LOOK_PITCH <= 0:
+            return 0.0
+        k = BOT_LOOK_SPEED / 2.5
+        p = BOT_LOOK_PITCH * (math.sin(now * 1.7 * k + self._ph3) + 0.35 * math.sin(now * 3.9 * k + self._ph1))
+        lim = BOT_LOOK_PITCH * 1.3
+        return max(-lim, min(lim, p))
+
+    def jump_step(self, now, moving, allow=True):
+        """None, or the in-air state for this tick: (physx_state, pose, vertical speed cm/s, height mm)."""
+        if not BOT_JUMP or not allow:
+            self._jk = -1
+            return None
+        if self._jk < 0:
+            esc_jump = bool(self._esc and self._esc.get("jump"))
+            if (esc_jump and now >= self._jump_cool) or (moving and now >= self._next_jump):
+                self._next_jump = now + random.uniform(3.0, 8.0)
+                self._jk = 0; self.jumps += 1
+            else:
+                return None
+        k = self._jk; self._jk += 1
+        if self._jk >= JUMP_TICKS:
+            self._jk = -1; self._jump_cool = now + 0.25
+        u = (k + 0.5) / JUMP_TICKS
+        return (1, 11 if moving else 0, int(JUMP_V0 * (1.0 - 2.0 * u)), int(4.0 * BOT_JUMP_HEIGHT * u * (1.0 - u)))
+
+    # ---- stuck handling (BOT_UNSTUCK) ----
+    def _stuck_now(self, st, now):
+        if st.stuck_pending:
+            st.stuck_pending = False
+            return True
+        if self._moving_since and now - self._moving_since >= 3.5:
+            h = st.srv_hist
+            if len(h) >= 3 and now - h[-1][0] < 2.0:
+                t_new, p_new = h[-1]
+                old = None
+                for t, p in h:
+                    if t_new - t <= 4.5:
+                        old = (t, p)
+                        break
+                if old is not None and t_new - old[0] >= 3.0:
+                    d = math.hypot(p_new[0] - old[1][0], p_new[2] - old[1][2])
+                    if d < 1500.0:
+                        return True      # we should have covered ~15 m in that time
+        return False
+
+    def _unstuck(self, st, now, my, new_y, ux, uz):
+        esc = self._esc
+        if esc is None:
+            if now < self._esc_block_until or not self._stuck_now(st, now):
+                return None
+            recent = [t for t in st.stuck_times if now - t < 45.0]
+            st.stuck_times.append(now); n = len(recent) + 1
+            if n == 1:
+                self._esc_side = random.choice((-1, 1))
+            sd = self._esc_side
+            if n == 1:
+                segs = [(90 * sd, 1.6, True)]
+            elif n == 2:
+                segs = [(90 * sd, 3.0, True)]
+            elif n == 3:
+                segs = [(90 * sd, 5.0, True)]
+            elif n == 4:
+                segs = [(180, 1.2, False), (-90 * sd, 6.0, True)]
+            elif n == 5:
+                segs = [(-90 * sd, 8.0, True)]
+            else:
+                side = random.choice((-1, 1))
+                segs = [(180, 1.5, False), (90 * side, 8.0, True)]
+            esc = self._esc = {"segs": segs, "t0": now, "ux": ux, "uz": uz, "jump": segs[0][2], "n": n}
+            st.srv_hist.clear()
+
+            def _nm(a):
+                return "back" if abs(a) == 180 else ("left" if a > 0 else "right")
+            self.events.append("blocked (x%d) -> %s" % (n, " then ".join(_nm(a) for a, _d, _j in segs)))
+        t_in = now - esc["t0"]; acc = 0.0; seg = None
+        for a, d, j in esc["segs"]:
+            if t_in < acc + d:
+                seg = (a, d, j)
+                break
+            acc += d
+        if seg is None:                       # finished -> back to normal walking
+            self._esc = None; self._esc_block_until = now + 1.5; self._moving_since = now
+            st.srv_hist.clear(); st.stuck_pending = False; st.blocked = 0
+            return None
+        esc["jump"] = seg[2]
+        ca, sa = math.cos(math.radians(seg[0])), math.sin(math.radians(seg[0]))
+        vx = esc["ux"] * ca - esc["uz"] * sa; vz = esc["ux"] * sa + esc["uz"] * ca
+        step = float(self.step)
+        return (int(my[0] + vx * step), new_y, int(my[2] + vz * step)), 1000.0, True
+
+    # ---- zone handling ----
+    def _zone_r(self, st):
+        return st.zone_radius * ZONE_AVOID_MARGIN + ZONE_BUFFER
+
+    def _in_zone(self, st, pt):
+        if st.zone_center is None or st.zone_radius <= 0 or pt is None:
+            return False
+        cx, cz = st.zone_center[0], st.zone_center[-1]
+        return math.hypot(pt[0] - cx, pt[2] - cz) < self._zone_r(st)
+
+    def _zone_guard(self, st, my, new):
+        """zone_mode=avoid: a step never ends inside the zone circle (slides along the edge / walks out)."""
+        if self.zone_mode != "avoid" or st.zone_center is None or st.zone_radius <= 0 or my is None:
+            return new
+        cx, cz = st.zone_center[0], st.zone_center[-1]; R = self._zone_r(st); step = float(self.step)
+        d_my = math.hypot(my[0] - cx, my[2] - cz); d_new = math.hypot(new[0] - cx, new[2] - cz)
+        if d_new >= R:
+            return new
+        if d_my < R:
+            if d_new > d_my:
+                return new
+            rx, rz = ((my[0] - cx) / d_my, (my[2] - cz) / d_my) if d_my > 1.0 else (1.0, 0.0)
+            return (int(my[0] + rx * step), new[1], int(my[2] + rz * step))
+        rx, rz = (my[0] - cx) / d_my, (my[2] - cz) / d_my
+        tx, tz = -rz, rx
+        ux, uz = new[0] - my[0], new[2] - my[2]; un = math.hypot(ux, uz) or 1.0
+        tang = (ux * tx + uz * tz) / un
+        if abs(tang) < 0.25:
+            sgn = self._zone_side
+        else:
+            sgn = 1 if tang > 0 else -1; self._zone_side = sgn
+        sx = my[0] + tx * sgn * step; sz = my[2] + tz * sgn * step
+        dd = math.hypot(sx - cx, sz - cz)
+        if dd < R * 1.005:
+            k = (R * 1.005) / max(dd, 1.0); sx = cx + (sx - cx) * k; sz = cz + (sz - cz) * k
+        return (int(sx), new[1], int(sz))
+
+    def _zone_exit_point(self, st):
+        if st.my_pos is None or not self._in_zone(st, st.my_pos):
+            return None
+        cx, cz = st.zone_center[0], st.zone_center[-1]
+        dx = st.my_pos[0] - cx; dz = st.my_pos[2] - cz
+        d = math.hypot(dx, dz)
+        if d < 1.0:
+            dx, dz, d = 1.0, 0.0, 1.0
+        out = self._zone_r(st) * 1.08
+        return (cx + dx / d * out, st.my_pos[1], cz + dz / d * out)
+
+    def _idle_point(self, st, now, check_zone=True):
+        """Wander slowly around the spawn point; None = stand still for a moment."""
+        my = st.my_pos; home = st.home or my
+        if self._idle_pt is not None:
+            d = math.hypot(self._idle_pt[0] - my[0], self._idle_pt[2] - my[2])
+            if d <= 400.0:
+                self._idle_pt = None; self._idle_until = now + random.uniform(1.5, 4.0)
+            elif now < self._idle_timeout and not (check_zone and self._in_zone(st, self._idle_pt)):
+                return self._idle_pt
+            else:
+                self._idle_pt = None; self._idle_until = now + 1.0
+        if now < self._idle_until:
+            return None
+        for _ in range(12):
+            ang = random.uniform(0.0, 6.2832); rad = random.uniform(0.35, 1.0) * BOT_IDLE_RADIUS
+            pt = (home[0] + rad * math.cos(ang), my[1], home[2] + rad * math.sin(ang))
+            if not (check_zone and self._in_zone(st, pt)):
+                self._idle_pt = pt; self._idle_timeout = now + 12.0
+                return pt
+        self._idle_until = now + 2.0
+        return None
+
+    def _aim_avoid(self, st, now):
+        ex = self._zone_exit_point(st)
+        if ex is not None:
+            return ex
+        r = self._rescue_point(st)
+        if r is not None and not self._in_zone(st, r):
+            return r
+        t = self._target_point(st, now)
+        if t is not None and not self._in_zone(st, t):
+            return t
+        return self._idle_point(st, now)
+
+    def _aim_safe(self, st, now):
+        """Battle Royale: stay near the landing spot; only walk in when the zone circle closes on us."""
+        my = st.my_pos
+        if st.zone_center is not None and st.zone_radius > 0:
+            cx, cz = st.zone_center[0], st.zone_center[-1]
+            d = math.hypot(my[0] - cx, my[2] - cz)
+            if d > st.zone_radius * 0.85:
+                k = (st.zone_radius * 0.6) / max(d, 1.0)
+                return (cx + (my[0] - cx) * k, my[1], cz + (my[2] - cz) * k)
+        r = self._rescue_point(st)
+        if r is not None:
+            return r
+        t = self._target_point(st, now)
+        if t is not None:
+            return t
+        return self._idle_point(st, now, check_zone=False)
+
+    def aim_point(self, st, now):
+        if self.zone_mode == "safe" and st.my_pos is not None:
+            return self._aim_safe(st, now)
+        if self.zone_mode == "avoid" and st.my_pos is not None:
+            return self._aim_avoid(st, now)
+        r = self._rescue_point(st)
+        if r is not None:
+            return r
+        t = self._target_point(st, now); z = self._zone_point(st)
+        if t is None:
+            return z
+        if z is not None and self._outside_zone(st, t):
+            return z
+        return t
+
+    def _target_point(self, st, now):
+        if st.target_pos is None:
+            return None
+        if st.target_seen is not None:
+            gap = now - st.target_seen
+            if 0.05 < gap < self.coast_limit:
+                vx, vz = st.target_vel
+                return (st.target_pos[0] + vx * gap, st.target_pos[1], st.target_pos[2] + vz * gap)
+        return st.target_pos
+
+    def _rescue_point(self, st):
+        if not st.downed or st.my_pos is None:
+            return None
+        best, best_d = None, None
+        for pos in st.downed.values():
+            if pos is None:
+                continue
+            dx = pos[0] - st.my_pos[0]; dz = pos[2] - st.my_pos[2]
+            d = math.sqrt(dx * dx + dz * dz)
+            if best_d is None or d < best_d:
+                best, best_d = pos, d
+        return best
+
+    def _zone_point(self, st):
+        if st.zone_center is None or st.zone_radius <= 0:
+            return None
+        cx, cz = st.zone_center[0], st.zone_center[-1]
+        y = st.my_pos[1] if st.my_pos else 0
+        ring = st.zone_radius * self.orbit_fraction
+        if st.my_pos is not None:
+            dx = st.my_pos[0] - cx; dz = st.my_pos[2] - cz
+            here = math.sqrt(dx * dx + dz * dz)
+            if here <= ring * 1.15:
+                if here > 1:
+                    st.orbit_angle = math.degrees(math.atan2(dz, dx))
+                stride = float(self.step)
+                max_deg = math.degrees(stride / max(ring, 1)) * 0.85
+                st.orbit_angle = (st.orbit_angle + min(self.orbit_speed, max_deg)) % 360.0
+                rad = math.radians(st.orbit_angle)
+                return (cx + ring * math.cos(rad), y, cz + ring * math.sin(rad))
+        return (cx, y, cz)
+
+    def _outside_zone(self, st, point):
+        if st.zone_center is None or st.zone_radius <= 0:
+            return False
+        cx, cz = st.zone_center[0], st.zone_center[-1]
+        dx = point[0] - cx; dz = point[2] - cz
+        return math.sqrt(dx * dx + dz * dz) > st.zone_radius * 0.75
+
+    def plan(self, st, now):
+        r = self._plan_inner(st, now)
+        if r is not None and r[2]:
+            if not self._moving_since:
+                self._moving_since = now
+        else:
+            self._moving_since = 0.0
+            if self._esc is not None and st.phase == PHASE_ROUND_END:
+                self._esc = None
+        return r
+
+    def _plan_inner(self, st, now):
+        r = self._plan_raw(st, now)
+        if r is None or not r[2]:
+            return r
+        g = self._zone_guard(st, st.my_pos, r[0])
+        return r if g is r[0] else (g, r[1], True)
+
+    def _plan_raw(self, st, now):
+        if st.my_pos is None or st.my_id is None:
+            return None
+        my = st.my_pos
+        if self.freeze_on_round_end and st.phase == PHASE_ROUND_END:
+            return my, 0.0, False                       # stand still only while a round is ending
+        aim = self.aim_point(st, now)
+        if aim is None:
+            return my, 0.0, False
+        dx = aim[0] - my[0]; dz = aim[2] - my[2]
+        dist = math.sqrt(dx * dx + dz * dz)
+        ty = aim[1] if len(aim) > 2 else my[1]
+        new_y = int(my[1] + (ty - my[1]) * 0.35)
+        if dist <= 150.0 or dist < 1e-6:
+            return (my[0], new_y, my[2]), dist, False
+        if BOT_UNSTUCK:
+            r = self._unstuck(st, now, my, new_y, dx / dist, dz / dist)
+            if r is not None:
+                return r
+        step = float(self.step)
+        if dist > 8000.0:
+            step = self.max_step
+        ux, uz = dx / dist, dz / dist
+        if BOT_STRAFE and dist > 3000.0:
+            ang = math.radians(BOT_STRAFE_DEG * math.sin(now * 0.9 + self._ph1)
+                               + BOT_STRAFE_DEG * 0.4 * math.sin(now * 2.3 + self._ph2))
+            ca, sa = math.cos(ang), math.sin(ang)
+            ux, uz = ux * ca - uz * sa, ux * sa + uz * ca
+            step *= 0.92 + 0.08 * math.sin(now * 0.5 + self._ph3)
+        move = step if dist > step else dist
+        nx = my[0] + ux * move; nz = my[2] + uz * move
+        return (int(nx), new_y, int(nz)), dist, True
+
+
+def _build_position_body(pid, old, new, yaw, st, moving, cam_yaw=None, pitch=0.0, jump=0, air=None):
+    """cam_yaw/pitch = where the camera looks (None -> look where we walk), jump = jump flag byte."""
+    ux = uz = None
+    if moving and old is not None:
+        dx = new[0] - old[0]; dz = new[2] - old[2]
+        dist = math.sqrt(dx * dx + dz * dz)
+        if dist >= 1:
+            ux, uz = dx / dist, dz / dist
+    cp = math.cos(math.radians(pitch)); sp = math.sin(math.radians(pitch))
+    if ux is not None:
+        vel = (int(ux * 500), 0, int(uz * 500))
+        rot = (int(ux * 100), 0, int(uz * 100)); tdir = (int(ux * 100), int(uz * 100))
+        if cam_yaw is None:
+            aim = (ux, 0.0, uz)
+        else:
+            r = math.radians(cam_yaw); aim = (math.sin(r) * cp, sp, math.cos(r) * cp)
+        pose = POSE_DASHING
+    elif moving and old is not None and cam_yaw is None:
+        vel = (0, 0, 0); rot = (0, 0, 0); tdir = (0, 0)
+        aim = (0.0, 0.0, 0.0); pose = POSE_STANDING
+    else:
+        vel = (0, 0, 0)
+        rad = math.radians(yaw if cam_yaw is None else cam_yaw); fx, fz = math.sin(rad), math.cos(rad)
+        rot = (int(fx * 100), 0, int(fz * 100)); tdir = (int(fx * 100), int(fz * 100))
+        aim = (fx * cp, sp, fz * cp); pose = POSE_STANDING
+    ps = 0
+    if air:                      # jumping: physx_state=1, pose 11 while running (0 standing), vertical speed, height
+        ps = air[0]; pose = 11 if ux is not None else 0
+        vel = (vel[0], int(air[2]), vel[2]); new = (new[0], new[1] + int(air[3]), new[2])
+        jump = 1 if BOT_JUMP_BYTE else jump
+    return build_player_state_upload(pid, new, rot, tdir, vel, aim, st, ps=ps, pp=pose, ping=90, jump=jump)
+
+
+# ---------- what the match server tells us ----------
+def mv_dispatch(cmd, body, st, tag, notes):
+    """Feed one decoded server packet into the movement state (never raises)."""
+    try:
+        st.cmd_stats[cmd] += 1
+        if body is None:
+            return
+        if cmd in (100, 101, 130, 117, 1901, 2001, 2012, 2005, 2038) and st.samples[cmd] < 2:
+            st.samples[cmd] += 1
+            notes.append(f"{tag} CMD-SAMPLE cmd={cmd} len={len(body)} hex={bytes(body[:48]).hex()}")
+        if cmd == 100 and st.hint is None:
+            h = parse_join_reply(body, st.account_id)
+            if h:
+                st.hint = h
+                notes.append(f"{tag} join reply: our uid found, slot candidate={h['slot']} ext={h['ext']}")
+        if cmd == CMD_PLAYER_JOIN:
+            info = parse_player_join(body)
+            if info is None:
+                return
+            uid, fid, name = info
+            st.add_player(fid, name)
+            if uid == st.account_id and st.my_id is None:
+                st.set_identity(fid); st.id_source = "cmd101"
+                notes.append(f"{tag} identity known (id 0x{fid:08X})")
+        elif cmd == CMD_MY_STATE:
+            if st.my_id is None and st.hint is not None:
+                a = peek_first_varints(body, 2)
+                if a and a[0] in (st.hint["slot"], st.hint["ext"]):
+                    st.set_identity(a[0]); st.id_source = "cmd100+my-state"
+                    notes.append(f"{tag} identity confirmed: {a[0]} (cmd 100 value == first field of our state)")
+                elif st.samples["id_log"] < 2:
+                    st.samples["id_log"] += 1
+                    notes.append(f"{tag} my-state first fields={a} | cmd 100 slot={st.hint['slot']} ext={st.hint['ext']}")
+            pos = decode_my_state(body)
+            if pos is not None:
+                first = st.pos_seen == 0
+                st.seed_my_pos(pos)
+                if first:
+                    notes.append(f"{tag} server position known: x={pos[0]} y={pos[1]} z={pos[2]} (mm)")
+        elif cmd == CMD_OTHER_STATES:
+            players = decode_players_v2(body); mates = st.teammates()
+            if BOT_SIGNALS:
+                st.record_signals(players)
+            for s, info in players.items():
+                if s not in mates:
+                    continue
+                if info.get("physx_pose") == 8:
+                    st.downed[s] = info["pos"]
+                elif s in st.downed:
+                    st.downed.pop(s, None)
+            if st.target_short is not None:
+                info = players.get(st.target_short)
+                if info is not None:
+                    st.update_target(info, time.time())
+        elif cmd == CMD_SERVER_TIME:
+            parsed = decode_server_time(body)
+            if parsed is not None:
+                st.sync_clock(parsed[0], time.time())
+        elif cmd == CMD_GRI_SYNC:
+            parsed = get_match_phase(body)
+            if parsed is not None:
+                phase, rn, _s, _e = parsed
+                now_t = time.time()
+                new_round = False
+                if rn is not None and st.round_no is not None and rn != st.round_no:
+                    new_round = True
+                if phase != st.phase:
+                    if st.phase == PHASE_ROUND_END and phase != PHASE_ROUND_END:
+                        new_round = True
+                    elif phase == PHASE_PREPARE and st.phase is not None:
+                        new_round = True
+                    st.phase = phase
+                    if phase == PHASE_FIGHT:
+                        notes.append(f"{tag} fight phase")
+                    elif phase == PHASE_ROUND_END:
+                        notes.append(f"{tag} round ended")
+                if rn is not None:
+                    st.round_no = rn
+                if new_round:
+                    st.new_round(now_t)
+                    notes.append(f"{tag} new round {rn if rn is not None else ''} - movement resumed")
+        elif cmd == CMD_SAFE_ZONE:
+            zone = decode_safezone(body)
+            if zone is None:
+                return
+            center = zone.get("inner_center") or zone.get("outer_center")
+            radius = zone.get("inner_radius") or zone.get("outer_radius") or 0
+            if center and radius > 0:
+                st.zone_center = (center[0], 0, center[1]); st.zone_radius = radius * ZONE_RADIUS_SCALE
+        elif cmd == CMD_QUICK_CHAT:
+            parsed = decode_quick_chat(body)
+            if parsed is None:
+                return
+            cid, short, _ = parsed
+            if cid in (QUICK_CHAT_FOLLOW, QUICK_CHAT_HELP):
+                st.target_short = short
+        elif cmd == CMD_DEAD:
+            try:
+                pid, _ = _rd_varint(body, 0)
+            except (IndexError, ValueError):
+                return
+            if st.my_id is not None and pid == st.my_id and st.alive:
+                st.alive = False; st.dead_since = time.time()
+                notes.append(f"{tag} we were downed")
+    except Exception:
+        pass
+
+
+# ---------- the walking loop ----------
+async def mv_movement_loop(sock, ra, ukb, mc, state, stop_evt, tag, mode_tag):
+    br = (mode_tag == "BATTLE_ROYALE")
+    planner = MovementPlanner(zone_mode=ZONE_MODE_BR if br else ZONE_MODE_LW, freeze_on_round_end=not br)
+    wait_ground = br and BR_WAIT_GROUND
+    nr = (await layouts_from_mask(mc))[1]
+    loop = asyncio.get_event_loop()
+    t_start = time.time(); next_tick = t_start
+    move_ctr = 0; last_yaw_deg = 0.0
+    last_stat = t_start; warned = False; logged_air = False; logged_moving = False
+    while not stop_evt.is_set():
+        now = time.time()
+        if BOT_SIGNALS and now - last_stat >= 60 and state.cmd_stats:
+            last_stat = now
+            try:
+                print_info(f"{tag} CMDS " + ", ".join(f"{c}:{n}" for c, n in state.cmd_stats.most_common(20)))
+                if state.sig:
+                    print_info(f"{tag} SIGNALS (other players) " + ", ".join(
+                        f"ps={k[0]}/pp={k[1]}/air={k[2]}:{v}" for k, v in state.sig.most_common(10)))
+            except Exception:
+                pass
+        if now < next_tick:
+            try:
+                await asyncio.wait_for(stop_evt.wait(), timeout=next_tick - now)
+                break
+            except asyncio.TimeoutError:
+                pass
+            continue
+        next_tick += MOVE_INTERVAL
+        if next_tick < now:
+            next_tick = now + MOVE_INTERVAL
+        if not state.sent and not warned and now - t_start > 25.0:
+            warned = True
+            top = ", ".join(f"{c}:{n}" for c, n in state.cmd_stats.most_common(12)) or "none"
+            print_warning(f"{tag} not moving yet after 25s | identity={'yes' if state.my_id is not None else 'NO (no cmd 101 / cmd 100 id)'} "
+                          f"| server position={'yes' if state.pos_seen else 'NO (no cmd 2001 from the server)'} | server cmds: {top}")
+        if state.my_id is None and BR_ID_GUESS and state.hint is not None and state.pos_seen \
+                and now - (state.first_pos_at or now) > 5.0:
+            state.set_identity(state.hint["slot"]); state.id_source = "cmd100 (guess)"
+            print_warning(f"{tag} identity GUESSED from cmd 100: {state.hint['slot']} (BR_ID_GUESS=1)")
+        if state.my_id is None:
+            continue
+        if not state.alive:
+            if state.dead_since is not None and now - state.dead_since > ALIVE_RECOVER_SEC:
+                state.alive = True; state.dead_since = None; state.need_resync = True
+                state.round_started = now
+            else:
+                continue
+        if state.need_resync and state.round_started is not None \
+                and now - state.round_started > 3.0 and state.server_pos is not None:
+            state.my_pos = state.server_pos; state.blocked = 0; state.need_resync = False
+        if wait_ground and (state.in_flight(now) or state.needs_history(now)):
+            state.need_resync = True                    # snap to the real position when we land
+            if not logged_air and state.in_flight(now):
+                logged_air = True
+                print_info(f"{tag} plane / free-fall -> waiting for the ground before walking")
+            continue
+        planned = planner.plan(state, now)
+        if planned is None:
+            continue
+        new, dist, moving = planned
+        old = state.my_pos; state.my_pos = new
+        st = state.server_time(now)
+        pkts = []
+        if old is not None and moving:
+            ddx = new[0] - old[0]; ddz = new[2] - old[2]
+            if ddx * ddx + ddz * ddz >= 1:
+                last_yaw_deg = math.degrees(math.atan2(ddx, ddz)) % 360.0
+        cam = planner.look_yaw(now, last_yaw_deg, moving)
+        air = planner.jump_step(now, moving, state.phase != PHASE_ROUND_END)
+        while planner.events:
+            print_info(f"{tag} {planner.events.pop(0)}")
+        try:
+            if MOVE_PKT_MODE != "new":
+                body = _build_position_body(state.my_id, old, new, planner.next_yaw(), st, moving,
+                                            cam_yaw=cam, pitch=planner.pitch(now), air=air)
+                pkts.append(await build_packet(0x6B, nr, 0, CMD_MY_STATE, None, 1, body, ukb, True))
+            if MOVE_PKT_MODE != "old":
+                move_ctr = (move_ctr + 1) & 0xFFFFFFFF
+                mphase = ("game" if state.phase == PHASE_FIGHT else "arena") if MOVE_PKT_PHASE == "auto" else MOVE_PKT_PHASE
+                pkts.append(await build_movement_packet_2001(
+                    ukb, 0x6B, (11 if (air and moving) else (POSE_DASHING if moving else POSE_STANDING)),
+                    new[0], new[1] + (int(air[3]) if air else 0), new[2], st, move_ctr, 1 if moving else 0,
+                    state.my_id, 0, mphase))
+        except Exception as e:
+            print_warning(f"{tag} could not build a movement packet: {type(e).__name__}: {e}")
+            continue
+        if not pkts:
+            continue
+        try:
+            for pkt in pkts:
+                await loop.sock_sendto(sock, pkt, ra)
+            state.sent += 1
+            if not logged_moving:
+                logged_moving = True
+                print_success(f"{tag} entered the map - moving now")
+        except Exception:
+            pass
+# ===== MOVEMENT ENGINE END =====
+
 # ============================================================
 # ANTI-AFK
 # ============================================================
@@ -1923,7 +3235,7 @@ async def send_anti_afk_fire(sock, server_addr, udp_key_bytes, match_code, accou
 
 
 async def anti_afk_worker(sock, resolved_ip, port, udp_key_bytes, match_code,
-                          account_id, stop_event, match_index):
+                          account_id, stop_event, match_index, with_moves=True):
     server_addr = (resolved_ip, port)
     fire_count = 0
     move_count = 0
@@ -1936,10 +3248,10 @@ async def anti_afk_worker(sock, resolved_ip, port, udp_key_bytes, match_code,
                     ok = await send_anti_afk_fire(sock, server_addr, udp_key_bytes, match_code, account_id)
                     if ok:
                         fire_count += 1
-                    if random.random() < 0.4:
+                    if with_moves and random.random() < 0.4:
                         await send_anti_afk_movement(sock, server_addr, udp_key_bytes, match_code, account_id)
                         move_count += 1
-                else:
+                elif with_moves:
                     ok = await send_anti_afk_movement(sock, server_addr, udp_key_bytes, match_code, account_id)
                     if ok:
                         move_count += 1
@@ -1966,17 +3278,39 @@ async def anti_afk_worker(sock, resolved_ip, port, udp_key_bytes, match_code,
 # ============================================================
 # play_game
 # ============================================================
+# RUDP_ACK (Railway variable, optional): answer EVERY reliable packet of the match server (the Clash-Squad bot does this).
+# Before, only the first two were answered with fixed values; the server then kept re-sending 'join finished' (cmd 130)
+# again and again and never sent the player list / zone / our id.  RUDP_ACK=0 = old behaviour.
+RUDP_ACK = os.environ.get("RUDP_ACK", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
                     account_id, player_region, client_version, key, iv,
-                    match_index: int, on_match_complete=None):
+                    match_index: int, on_match_complete=None, mode_tag: str = "BATTLE_ROYALE"):
     match_start_time = time.time()
     ping_task = None
     anti_afk_task = None
+    mv_holder = {"task": None}
+    move_stop = asyncio.Event()
+    mv_state = None
+    try:
+        mv_state = MovementState(int(account_id)) if MOVEMENT_ENGINE else None
+    except Exception:
+        mv_state = None
+    mv_tag = f"[MOVE #{match_index}]"
     sock = None
     ping_stop = asyncio.Event()
     anti_afk_stop = asyncio.Event()
     uid_str = str(account_id)
     completed_cleanly = False
+    end_reason = "error / handshake"
+    thunder_sent = False
+    join_match_received = False
+    cmd_counts: Dict[Any, int] = {}       # diagnostics: which commands the match server sent (and the last one before it went silent)
+    undecoded = 0
+    acks_sent = 0
+    last_cmd = None
+    last_cmd_at = match_start_time
 
     try:
         ip, port = server_ip_port.split(":")
@@ -1992,6 +3326,7 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
         sock.setblocking(False)
         udp_key_bytes = bytes.fromhex(udp_key)
         hello_packet = await build_hello_packet(f"{account_id}_2585", udp_key_bytes, match_code)
+        ack_layout = (await layouts_from_mask(match_code))[1]
         await loop.sock_sendto(sock, bytes.fromhex(hello_packet), (resolved_ip, port))
         ack_state = "waiting_for_hello_reply"
         thunder_sent = False
@@ -2017,9 +3352,17 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
             anti_afk_started = True
             anti_afk_task = asyncio.create_task(
                 anti_afk_worker(sock, resolved_ip, port, udp_key_bytes, match_code,
-                                account_id, anti_afk_stop, match_index)
+                                account_id, anti_afk_stop, match_index,
+                                with_moves=(mv_state is None))
             )
             print_success(f"[Anti-AFK] Worker Started | Match #{match_index}")
+            if mv_state is not None and mv_holder["task"] is None:
+                mv_holder["task"] = asyncio.create_task(
+                    mv_movement_loop(sock, (resolved_ip, port), udp_key_bytes, match_code,
+                                     mv_state, move_stop, mv_tag, mode_tag)
+                )
+                print_success(f"{mv_tag} Movement engine started ({mode_tag}, zone mode "
+                              f"{ZONE_MODE_BR if mode_tag == 'BATTLE_ROYALE' else ZONE_MODE_LW})")
 
         async def send_thunder_sharma_inline():
             nonlocal ack_state, thunder_sent, sharma_sent
@@ -2054,15 +3397,35 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
                 if response:
                     last_activity = time.time()
                     frame = await decode_packet(response, udp_key_bytes, match_code)
+                    if not frame:
+                        undecoded += 1
                     if frame:
+                        cmd_counts[frame['cmd']] = cmd_counts.get(frame['cmd'], 0) + 1
+                        last_cmd, last_cmd_at = frame['cmd'], time.time()
+                        if mv_state is not None:
+                            mv_notes: List[str] = []
+                            mv_dispatch(frame['cmd'], frame.get('content'), mv_state, mv_tag, mv_notes)
+                            for _n in mv_notes:
+                                print_info(_n)
+                        if RUDP_ACK and frame.get('orderId') is not None and frame.get('msgKey', 255) < 100:
+                            try:     # reliable packet -> tell the server we got it (order id + 1), like the Clash-Squad bot
+                                await loop.sock_sendto(sock, await build_packet(
+                                    0x68, ack_layout, 0, 2, None, 1,
+                                    ((frame['orderId'] + 1) & 0xFFFF).to_bytes(2, "little"), udp_key_bytes), server_addr)
+                                acks_sent += 1
+                            except Exception:
+                                pass
                         ptype = await classify(frame)
                         if frame['cmd'] in [103, 107]:
                             print_success(f"[MATCH #{match_index}] Completed (cmd {frame['cmd']})")
+                            end_reason = f"server cmd {frame['cmd']}"
                             completed_cleanly = True
                             local_closed = True
                             continue
                         if frame['cmd'] == 101:
                             try:
+                                if RUDP_ACK:
+                                    continue          # already answered above with the right order id
                                 ack_pkt = await build_packet(
                                     0x68, (await layouts_from_mask(match_code))[1],
                                     0, 2, None, 1, b"\x01\x00", udp_key_bytes
@@ -2115,6 +3478,7 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
                 elif ack_state == "thunder_sharma_sent":
                     if (time.time() - last_activity) > MATCH_IDLE_TIMEOUT:
                         print_success(f"[MATCH #{match_index}] Finished naturally")
+                        end_reason = f"silent for {int(MATCH_IDLE_TIMEOUT)}s (server stopped answering)"
                         completed_cleanly = True
                         break
                 continue
@@ -2143,6 +3507,17 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
                     asyncio.create_task(on_match_complete())
                 except Exception as e:
                     print_warning(f"[EXP-REFRESH] post-match trigger failed: {e}")
+        move_stop.set()
+        _mt = mv_holder["task"]
+        if _mt:
+            try:
+                await asyncio.wait_for(_mt, timeout=2.0)
+            except Exception:
+                _mt.cancel()
+                try:
+                    await _mt
+                except BaseException:
+                    pass
         anti_afk_stop.set()
         if anti_afk_task:
             try:
@@ -2165,6 +3540,17 @@ async def play_game(server_ip_port, thunder, sharma, udp_key, match_code,
                 sock.close()
             except Exception:
                 pass
+        print_info(f"[MATCH #{match_index}] RESULT: {end_reason} after {int(time.time() - match_start_time)}s | "
+                   f"startup packets sent={thunder_sent} | join-match seen={join_match_received}")
+        try:
+            top = sorted(cmd_counts.items(), key=lambda kv: -kv[1])[:8]
+            if mv_state is not None:
+                print_info(f"{mv_tag} ACKs sent={acks_sent} | RESULT: position updates sent={mv_state.sent} | server position seen={mv_state.pos_seen}x | "
+                           f"identity={mv_state.id_source or 'no'} | zone={'yes' if mv_state.zone_center else 'no'}")
+            print_info(f"[MATCH #{match_index}] SERVER CMDS: {', '.join(f'{c}x{n}' for c, n in top) or 'none'} | "
+                       f"last cmd={last_cmd} at {int(last_cmd_at - match_start_time)}s | undecoded={undecoded}")
+        except Exception:
+            pass
         remaining = await _dec_match(uid_str)
         total = await _get_total_match_count()
         print_info(f"[MATCH #{match_index}] Closed. UID active: {remaining} | Total active: {total}")
@@ -2220,13 +3606,15 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
         return "BATTLE_ROYALE", BR_MODE_ID, BR_MAP_ID
 
     async def trigger_post_match_refresh():
-        await asyncio.sleep(EXP_REFRESH_AFTER_MATCH_DELAY)
-        try:
-            cd = bot_state.account_credentials.get(uid_str)
-            if cd:
-                await refresh_account_profile(cd)
-        except Exception as e:
-            print_warning(f"[EXP-REFRESH] post-match refresh error: {e}")
+        # the server may credit the match a few seconds late (Superfast checks at 5/8/12s) -> check 3 times
+        for wait in (EXP_REFRESH_AFTER_MATCH_DELAY, 6.0, 10.0):
+            await asyncio.sleep(wait)
+            try:
+                cd = bot_state.account_credentials.get(uid_str)
+                if cd:
+                    await refresh_account_profile(cd, log_same=True)
+            except Exception as e:
+                print_warning(f"[EXP-REFRESH] post-match refresh error: {e}")
 
     async def cancel_play_matches():
         """Stop every running match of this account (used by PAUSE, so EXP gain really stops)."""
@@ -2357,7 +3745,10 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                 async def send_start_match():
                     nonlocal search_attempts, last_start_time
                     search_attempts += 1
-                    current_region = "ID"
+                    if START_REGION.lower() == "account":
+                        current_region = str((current_account_data or {}).get('region') or account_region or "ID").upper()   # the account's own region
+                    else:
+                        current_region = START_REGION.upper()
                     mode_tag, _mid, _map = _resolve_mode()
                     if mode_tag == "LONE_WOLF":
                         starter_func = start_game_lone_wolf
@@ -2365,7 +3756,15 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         starter_func = start_game_battle_royale
                     print_debug(f"[{mode_tag}] Sending StartMatch #{search_attempts} region: {current_region} (Lvl {current_level}, mode={_MODE})")
                     try:
-                        await asyncio.sleep(random.uniform(0.3, 0.6))
+                        await asyncio.sleep(random.uniform(0.2, 0.4))
+                        try:                                    # Superfast start: 'ready' packet first, 1 s, then the match search
+                            _own = (current_account_data or {}).get('account_id') or uid_str
+                            if READY_PACKET and writer and not writer.is_closing():
+                                writer.write(build_ready_packet(int(_own), current_key, current_iv))
+                                await asyncio.wait_for(writer.drain(), timeout=5)
+                        except Exception as _re:
+                            print_debug(f"[READY] packet not sent: {_re}")
+                        await asyncio.sleep(1.0)
                         await asyncio.wait_for(
                             starter_func(current_region, client_version, writer, current_key, current_iv),
                             timeout=10)
@@ -2382,7 +3781,8 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                     last_start_time = asyncio.get_running_loop().time()
 
                 if not bot_state.is_paused(uid_str):
-                    await send_start_match()
+                    if not (MAX_PARALLEL_MATCHES and await _get_match_count(uid_str) >= MAX_PARALLEL_MATCHES):
+                        await send_start_match()
 
                 while True:
                     if bot_state.is_deleted(uid_str):
@@ -2426,7 +3826,10 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                         _cached_at = 0.0
                     if _cached_at and time.time() - _cached_at > TOKEN_CACHE_TTL + 60:
                         _force_fresh_login("session is older than the allowed age")
-                    if now - last_start_time >= START_MATCH_INTERVAL:
+                    if MAX_PARALLEL_MATCHES and active_count >= MAX_PARALLEL_MATCHES:
+                        search_started = now                 # waiting for a free slot is not a stalled search
+                        no_response_count = 0                # ... and a quiet gateway is expected meanwhile
+                    elif now - last_start_time >= START_MATCH_INTERVAL:
                         await send_start_match()
 
                     try:
@@ -2497,7 +3900,8 @@ async def functional_lone_wolf(addrs, starter_packet, account_region, client_ver
                                     play_game(
                                         server_ip_port, thunder, sharma, udp_key, match_code,
                                         effective_acc_id, "ID", client_version, current_key, current_iv,
-                                        match_index=match_index, on_match_complete=trigger_post_match_refresh
+                                        match_index=match_index, on_match_complete=trigger_post_match_refresh,
+                                        mode_tag=mode_tag
                                     )
                                 )
                                 play_matches.append(new_match)
@@ -2662,7 +4066,46 @@ def _register_credentials(account_data: Dict):
         pass
 
 
-async def refresh_account_profile(account_data_or_uid: Any):
+async def get_player_personal_show(target_uid, token, server_url, release_version):
+    """Superfast.zip's way to read level / exp: -> {'level', 'exp', 'nickname'} or None. Used only as a BACKUP when
+    GetLoginData gives no level / exp."""
+    try:
+        base = str(server_url or "").rstrip("/")
+        if not base:
+            return None
+        payload = encrypt_api_bytes(build_proto({1: int(target_uid)}))
+        hdrs = {
+            "authorization": f"Bearer {token}",
+            "host": urlparse(base).hostname or "",
+            "x-ga": "v1 1",
+            "content-type": "application/x-www-form-urlencoded",
+            "releaseversion": str(release_version),
+            "user-agent": "UnityPlayer/2022.3.47f1",
+            "accept": "*/*",
+            "x-unity-version": "2022.3.47f1",
+        }
+        r = await client.post(f"{base}/GetPlayerPersonalShow", headers=hdrs, content=payload,
+                              timeout=httpx.Timeout(15.0, connect=12.0))
+        if r.status_code != 200 or not r.content:
+            _warn_limited("ps_http", f"[EXP-REFRESH] GetPlayerPersonalShow: HTTP {r.status_code}, {len(r.content or b'')} bytes | url={base}", 120.0)
+            return None
+        parsed = await parse_results(Parser().parse(r.content.hex()))
+        inner = get_proto_field(parsed, 1)
+        if not isinstance(inner, dict):
+            _warn_limited("ps_shape", f"[EXP-REFRESH] GetPlayerPersonalShow: unexpected answer, top fields={sorted(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__}", 120.0)
+            return None
+        exp = get_proto_field(inner, 7)
+        if exp is None:
+            _warn_limited("ps_noexp", f"[EXP-REFRESH] GetPlayerPersonalShow: no exp field, fields={sorted(inner.keys())}", 120.0)
+            return None
+        level = get_proto_field(inner, 6)
+        return {"level": int(level) if level else 1, "exp": int(exp), "nickname": str(get_proto_field(inner, 3, "") or "")}
+    except Exception as e:
+        _warn_limited("ps_exc", f"[EXP-REFRESH] GetPlayerPersonalShow failed: {type(e).__name__}: {e}", 120.0)
+        return None
+
+
+async def refresh_account_profile(account_data_or_uid: Any, log_same: bool = False):
     try:
         if isinstance(account_data_or_uid, str):
             uid = str(account_data_or_uid)
@@ -2688,10 +4131,9 @@ async def refresh_account_profile(account_data_or_uid: Any):
         except Exception as e:
             print_error(f"[EXP-REFRESH] send_getlogin exception for {uid}: {e}")
             return
+        res_proto, dict_res = (res if res else (None, {}))
         if not res:
-            print_warning(f"[EXP-REFRESH] GetLoginData returned None for {uid}")
-            return
-        res_proto, dict_res = res
+            _warn_limited(f"exp_none_{uid}", f"[EXP-REFRESH] GetLoginData returned None for {uid} -> trying GetPlayerPersonalShow", 120.0)
 
         def _safe_int(v, default):
             try:
@@ -2706,9 +4148,15 @@ async def refresh_account_profile(account_data_or_uid: Any):
         likes = _safe_int(get_proto_field(dict_res, 8, None), None)
         nickname = ""
         try:
-            nickname = res_proto.nickname or get_proto_field(dict_res, 4, "") or ""
+            nickname = (res_proto.nickname if res_proto is not None else "") or get_proto_field(dict_res, 4, "") or ""
         except Exception:
             nickname = ""
+        if level is None and exp is None:                           # backup: Superfast's GetPlayerPersonalShow
+            async with _refresh_sem:
+                ps = await get_player_personal_show(account_data.get('account_id'), token, url, release_version)
+            if ps:
+                level, exp = ps["level"], ps["exp"]
+                nickname = nickname or ps["nickname"]
         if level is None and exp is None:
             print_warning(f"[EXP-REFRESH] No level/exp field parsed for {uid}")
             return
@@ -2756,6 +4204,8 @@ async def refresh_account_profile(account_data_or_uid: Any):
             print_success(f"[LEVEL UP] UID {acc_id} : Lvl {old_level} -> {level} (EXP {old_exp} -> {exp})")
         elif old_exp != exp:
             print_success(f"[EXP] UID {acc_id} Lvl {level} | EXP {old_exp} -> {exp} (+{exp - old_exp})")
+        elif log_same:
+            print_info(f"[EXP-CHECK] UID {acc_id} Lvl {level} | EXP {exp} (server shows no change)")
     except Exception as e:
         print_error(f"refresh_account_profile error: {e}")
         traceback.print_exc()
@@ -2873,6 +4323,8 @@ async def process_account_uid_pass(uid: str, password: str,
             print_error(f"[LOGIN] MajorLogin / GetLoginData failed for UID {uid}")
             return None
         majorlogin_response, getlogin_result, login_payload_data, login_style = seq
+        release_version = majorlogin_response.release_version or release_version      # 'super' login: versions it really used
+        client_version = majorlogin_response.client_version or client_version
         res_proto, dict_res = getlogin_result
         acc_id = str(majorlogin_response.account_id)
         level = int(get_proto_field(dict_res, 6, 1) or 1)
@@ -2976,6 +4428,8 @@ async def process_account_token(access_token: str,
             print_error("[LOGIN] MajorLogin / GetLoginData failed (token flow)")
             return None
         majorlogin_response, getlogin_result, login_payload_data, login_style = seq
+        release_version = majorlogin_response.release_version or release_version      # 'super' login: versions it really used
+        client_version = majorlogin_response.client_version or client_version
         res_proto, dict_res = getlogin_result
         acc_id = str(majorlogin_response.account_id)
         level = int(get_proto_field(dict_res, 6, 1) or 1)
@@ -3051,6 +4505,66 @@ async def _wait_until_allowed(owner_id: str, *ids) -> bool:
     return True
 
 
+# ==================== HTTP KEEP-ALIVE PING (from Superfast.zip) ====================
+ENABLE_HTTP_PING = os.environ.get("HTTP_PING", "1").strip().lower() not in ("0", "false", "no", "off")
+PING_INTERVAL = 20.0
+PING_TIMEOUT = 8.0
+PING_REAL_IP = "103.109.214.211"
+_ping_sem = asyncio.Semaphore(30)          # with hundreds of accounts the pings never flood the connection pool
+
+
+async def send_ping(account_id, token, release_version, ping_url) -> bool:
+    try:
+        try:
+            acc = int(account_id)
+        except Exception:
+            acc = 0
+        now_ms = int(time.time() * 1000)
+        payload = struct.pack("<Q", acc & 0xFFFFFFFFFFFFFFFF) + struct.pack("<Q", now_ms & 0xFFFFFFFFFFFFFFFF)
+        hdrs = {
+            'accept': '*/*', 'accept-encoding': 'deflate, gzip',
+            'authorization': f'Bearer {token}',
+            'content-type': 'application/x-www-form-urlencoded',
+            'releaseversion': str(release_version),
+            'user-agent': 'UnityPlayer/2018.4.12f1',
+            'x-ga': 'v1 1', 'x-ga-sv': str(int(time.time())),
+            'x-real-ip': PING_REAL_IP, 'x-request-start': str(now_ms),
+            'x-unity-version': '2018.4.12f1',
+        }
+        async with _ping_sem:
+            r = await client.post(ping_url, headers=hdrs, content=payload, timeout=PING_TIMEOUT)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+async def ping_worker(acc_id: str, owner_id: str = ""):
+    """Pings <server_url>/Ping every ~20 s with the account's CURRENT token (read again each time, so a re-login is
+    picked up). Never raises, never blocks the game; pauses while the account is paused / stopped."""
+    ok_count = 0
+    fails = 0
+    try:
+        await asyncio.sleep(5.0 + random.uniform(0, 2.0))
+        while True:
+            if bot_state.is_deleted(acc_id):
+                return
+            if not (bot_state.is_paused(acc_id) or bot_state.is_stopped(acc_id)):
+                cd = bot_state.account_credentials.get(acc_id) or {}
+                base = str(cd.get('server_url') or "").rstrip("/")
+                if base and cd.get('token') and cd.get('release_version'):
+                    ok = await send_ping(acc_id, cd['token'], cd['release_version'], base + "/Ping")
+                    if ok:
+                        ok_count += 1
+                        fails = 0
+                    else:
+                        fails += 1
+                        if fails <= 3:
+                            _warn_limited(f"ping_{acc_id}", f"[PING] {acc_id} failed (#{fails})", 120.0)
+            await asyncio.sleep(max(5.0, PING_INTERVAL + random.uniform(-3.0, 3.0)))
+    except asyncio.CancelledError:
+        pass
+
+
 async def run_account_worker(account_data: Dict, label: str, mode: str = "auto", owner_user_id: str = ""):
     acc_id = str(account_data['account_id'])
     owner_id = str(owner_user_id or account_data.get('owner_user_id') or "")
@@ -3058,6 +4572,7 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto",
     exp_task = None
     functional_task = None
     guard_task = None
+    ping_task = None
     try:
         reg = account_data.get('region', 'ID')
         tcp_packet_online = await build_tcp_startup_packet(
@@ -3115,6 +4630,8 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto",
             )
         )
         guard_task = asyncio.create_task(plan_guard())
+        if ENABLE_HTTP_PING:
+            ping_task = asyncio.create_task(ping_worker(acc_id, owner_id))
         done, _pending = await asyncio.wait({functional_task, guard_task}, return_when=asyncio.FIRST_COMPLETED)
         if guard_task in done and not functional_task.done():
             print_warning(f"[PLAN] {acc_id} stopped: plan expired or over slot limit")
@@ -3134,7 +4651,7 @@ async def run_account_worker(account_data: Dict, label: str, mode: str = "auto",
     except Exception as e:
         print_error(f"run_account_worker error for {label}: {e}")
     finally:
-        tasks = (informational_task, exp_task, functional_task, guard_task)
+        tasks = (informational_task, exp_task, functional_task, guard_task, ping_task)
         for t in tasks:
             if t and not t.done():
                 t.cancel()
@@ -3288,9 +4805,10 @@ async def main():
     print_colored("   Persistent Device ID + TRUE Parallel + Smart DNS", Colors.WHITE)
     print_colored("=" * 60, Colors.CYAN)
     print_info(f"Start Match Interval: {START_MATCH_INTERVAL}s")
-    print_info(f"Login mode: {LOGIN_MODE} (order {'>'.join(LOGIN_MODE_ORDER)}) | region: {LOGIN_REGION} | PlAy_VeR: {PLAY_VER} | "
+    print_info(f"Login mode: {LOGIN_MODE} (order {'>'.join(LOGIN_MODE_ORDER)}) | super region: {SUPER_REGION} | web region: {LOGIN_REGION} | "
+               f"gateway style: {GATEWAY_STYLE} | PlAy_VeR: {PLAY_VER} | "
                f"APP_VERSION override: {','.join(_env_app_versions()) or '-'} | login code {LOGIN_CODE_VERSION}")
-    print_info(f"Offline Wait: {NEW_MATCH_DELAY}s (after match found)")
+    print_info(f"Offline Wait: {NEW_MATCH_DELAY}s (after match found) | parallel matches per account: {MAX_PARALLEL_MATCHES or 'unlimited'}")
     print_info(f"EXP Refresh: {EXP_REFRESH_INTERVAL}s interval (auto-slower with many accounts) + post-match trigger")
     print_info(f"Login queue: {LOGIN_CONCURRENCY} at a time | Refresh queue: {REFRESH_CONCURRENCY} at a time")
     print_info("Device System: 1 ID = 1 Persistent Device ID (devices.json)")
